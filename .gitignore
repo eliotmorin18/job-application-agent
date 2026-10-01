@@ -1,0 +1,5 @@
+.env
+*.pdf
+profile/private/
+__pycache__/
+.venv/
