@@ -3,3 +3,18 @@
 profile/private/
 __pycache__/
 .venv/
+
+# CV LaTeX: seul cv/template/ (générique, sans donnée perso) est versionné.
+# cv/reference/ (dont un CV externe, pas à nous) et cv/applications/ (CVs réels
+# générés par candidature, avec données personnelles) restent locaux.
+cv/reference/
+cv/applications/
+
+# Artefacts de compilation LaTeX (au cas où on compile localement)
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+build/

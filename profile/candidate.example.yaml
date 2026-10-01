@@ -1,0 +1,280 @@
+personal:
+  first_name: John
+  last_name: Doe
+  email: john.doe@example.com
+  phone: "+33 6 00 00 00 00"
+  city: Paris
+  country: France
+  linkedin: "https://www.linkedin.com/in/johndoe"
+  github: "https://github.com/johndoe"
+
+education:
+  - school: Example Engineering School
+    degree: Engineering Degree - Master's level
+    specialization: Computer Science and Artificial Intelligence
+    start_date: "2022-09"
+    end_date: "2026-06"
+    location: Paris, France
+    details:
+      - Machine Learning
+      - Computer Vision
+      - Data Science
+      - Optimization
+
+  - school: Example University
+    degree: Academic Exchange
+    specialization: Computer Science
+    start_date: "2025-09"
+    end_date: "2026-02"
+    location: Europe
+    details:
+      - Computer Vision
+      - Bioinformatics
+      - Topological Data Analysis
+
+experiences:
+  - id: example-research-company
+    company: Example Research Company
+    title: Computer Vision Intern
+    start_date: "2026-02"
+    end_date: "2026-08"
+    location: Paris, France
+    priority: high
+
+    tags:
+      - computer_vision
+      - object_detection
+      - segmentation
+      - deep_learning
+      - pytorch
+
+    context: >
+      Research internship focused on applying modern computer vision models
+      to real-world image datasets.
+
+    description: >
+      Developed computer vision pipelines for object detection,
+      segmentation and image classification.
+
+    responsibilities:
+      - Evaluated object-detection architectures
+      - Built image classification pipelines
+      - Prepared and annotated computer vision datasets
+      - Compared multiple deep-learning approaches
+
+    skills:
+      - Python
+      - PyTorch
+      - YOLO
+      - OpenCV
+
+  - id: example-software-company
+    company: Example Software Company
+    title: Software Development Intern
+    start_date: "2024-06"
+    end_date: "2024-08"
+    location: Paris, France
+    priority: medium
+
+    tags:
+      - generative_ai
+      - llm
+      - software_engineering
+      - api
+
+    context: >
+      Internship focused on integrating generative AI into an existing
+      software platform.
+
+    description: >
+      Developed an LLM-based assistant capable of interacting with
+      internal software tools.
+
+    responsibilities:
+      - Integrated an LLM API
+      - Implemented tool-calling workflows
+      - Automated repetitive software operations
+
+    skills:
+      - Python
+      - LLM APIs
+      - Prompt Engineering
+
+projects:
+  - id: multi-agent-system
+    name: Autonomous Multi-Agent System
+    priority: high
+
+    tags:
+      - autonomous_systems
+      - multi_agent
+      - optimization
+      - simulation
+
+    context: >
+      University research project on coordinated autonomous agents.
+
+    description: >
+      Designed and simulated a multi-agent coordination system with
+      predictive decision-making.
+
+    responsibilities:
+      - Designed the coordination strategy
+      - Implemented the simulation environment
+      - Evaluated different multi-agent scenarios
+
+    skills:
+      - Python
+      - NumPy
+      - SciPy
+      - Optimization
+
+    github_url: "https://github.com/johndoe/example-project"
+
+  - id: face-recognition
+    name: Face Recognition Pipeline
+    priority: high
+
+    tags:
+      - computer_vision
+      - face_recognition
+      - biometry
+      - image_processing
+
+    context: >
+      University computer vision project.
+
+    description: >
+      Built a complete face recognition pipeline including detection,
+      feature extraction and identity matching.
+
+    responsibilities:
+      - Implemented face detection
+      - Compared several visual descriptors
+      - Evaluated recognition performance
+
+    skills:
+      - Python
+      - OpenCV
+      - Computer Vision
+
+    github_url: ""
+
+  - id: bioinformatics-project
+    name: Bioinformatics Project
+    priority: medium
+
+    tags:
+      - bioinformatics
+      - genomics
+      - data_science
+
+    context: >
+      University bioinformatics coursework.
+
+    description: >
+      Worked on genome analysis, sequence alignment, phylogenetics and
+      biological data analysis.
+
+    responsibilities:
+      - Analyzed genomic sequences
+      - Implemented sequence alignment methods
+      - Studied evolutionary relationships
+
+    skills:
+      - Python
+      - Bioinformatics
+      - Data Analysis
+
+    github_url: ""
+
+skills:
+  programming:
+    - Python
+    - SQL
+    - Bash
+    - Julia
+
+  machine_learning:
+    - PyTorch
+    - Scikit-learn
+    - Transformers
+
+  computer_vision:
+    - YOLO
+    - OpenCV
+    - Object Detection
+    - Image Classification
+    - Segmentation
+
+  generative_ai:
+    - LLM APIs
+    - LLM-based Agents
+    - Prompt Engineering
+    - Tool Calling
+
+  data_science:
+    - Pandas
+    - NumPy
+    - Matplotlib
+
+  other:
+    - Optimization
+    - Multi-Agent Systems
+    - Bioinformatics
+    - Topological Data Analysis
+
+  tools:
+    - Git
+    - Docker
+    - Linux
+    - Jupyter
+
+languages:
+  - language: French
+    level: Native
+
+  - language: English
+    level: Fluent
+
+  - language: Spanish
+    level: Basic
+
+interests:
+  - Tennis
+  - Football
+  - Running
+  - Guitar
+
+preferences:
+  target_roles:
+    - Computer Vision Engineer
+    - Machine Learning Engineer
+    - Data Scientist
+    - AI Engineer
+
+  preferred_locations:
+    - Paris
+    - Remote
+
+  employment_types:
+    - Full-time
+
+form_answers:
+  work_authorization_france: true
+  sponsorship_required: false
+  available_start_date: ""
+  notice_period: ""
+  salary_expectations: ""
+  willing_to_relocate: true
+  willing_to_work_on_site: true
+  highest_degree: "Master's level Engineering Degree"
+
+application_rules:
+  allow_automatic_submission: false
+  ask_if_information_missing: true
+  ask_for_cover_letter: true
+  never_invent_information: true
+  max_cv_projects: 3
+  max_cv_experiences: 3
+  prefer_recent_experience: true
