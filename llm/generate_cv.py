@@ -35,8 +35,16 @@ Facts — THE MOST IMPORTANT RULE. This CV is sent in the candidate's name to a 
 any claim that is not in the profile is a lie the candidate will have to defend in an interview.
 - Every statement in the CV must be traceable to CANDIDATE PROFILE. If you cannot point to
   where the profile says it, do not write it.
-- Never add: a task, tool, library, method, metric, number, result, date, title, degree detail,
-  award, soft skill (e.g. "rigorous", "autonomous") or domain experience that is not in the profile.
+- Never add a VERIFIABLE fact that is not in the profile: a task, tool, library, method,
+  metric, number, result, date, title, degree detail, award or domain experience.
+- Never add a COMMITMENT that is not in the profile (availability, mobility, working hours,
+  travel, start date, salary...).
+- Exception — motivation and personality: in the "Profile" summary only, you may add a few
+  (up to 3) short statements of interest, motivation or general quality that fit the offer
+  (e.g. "intéressé par la planification de production", "curieux et rigoureux").
+  Each must be plausible given the profile, unverifiable, easy to defend in an interview,
+  and must not imply a skill or experience the profile does not have
+  ("passionné de MILP" or "expert en planification" are NOT allowed).
 - Never add a qualifier that strengthens a fact (e.g. "object-oriented Python", "in production",
   "at scale", "led", "expert") unless the profile says so.
 - STYLE REFERENCES may contain facts that are not in the profile: never copy facts from them,
@@ -47,6 +55,13 @@ any claim that is not in the profile is a lie the candidate will have to defend 
 - If the offer asks for something the profile does not have, it goes in gaps, never in the CV.
 - When in doubt, leave it out.
 
+Using the offer:
+- key_points and must_have are what the recruiter cares about most: select and order the
+  content so that what the profile really has for them comes first. nice_to_have comes next.
+- keywords: when the profile really supports a keyword, use the offer's exact word for it
+  (it helps ATS screening). Never use a keyword the profile does not support.
+- Required items of must_have that the profile does not cover go in gaps.
+
 Selection:
 - Select at most application_rules.max_cv_experiences experiences and
   application_rules.max_cv_projects projects, the most relevant to the offer.
@@ -56,7 +71,7 @@ Selection:
 Writing:
 - Write the CV in the language of the job offer (French offer -> French CV, otherwise English),
   including section titles (e.g. "Expérience", "Formation", "Projets", "Compétences Techniques", "Centres d'intérêt").
-- The "Profile" summary in heading must be written specifically for this offer (1-2 sentences).
+- The "Profile" summary in heading must be written specifically for this offer (2-3 sentences).
 - In heading, only include contact fields that are not empty in the profile.
 - Technical skills: put first what matches the offer; include languages.
 - Interests: 3 to 5 items from the profile, always including Guitar.
@@ -165,7 +180,11 @@ def generate_cv(
     candidate = yaml.safe_load(candidate_text)
 
     parts = [
-        "=== JOB OFFER ===\n" + json.dumps(offer, indent=2, ensure_ascii=False),
+        "=== JOB OFFER ===\n" + json.dumps(
+            {key: value for key, value in offer.items() if key != "removed_by_check"},
+            indent=2,
+            ensure_ascii=False,
+        ),
         "=== CANDIDATE PROFILE ===\n" + candidate_text,
         "=== TEMPLATE ===\n" + _read_tex_files(TEMPLATE_DIR),
         "=== STYLE REFERENCES ===\n" + _read_tex_files(REFERENCE_DIR),

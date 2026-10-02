@@ -18,9 +18,15 @@ A statement is SUPPORTED if the profile says the same thing, even translated
 A statement is UNSUPPORTED if it adds anything the profile does not say, for example:
 - a task, tool, library, method, metric, number, result or domain not in the profile
 - a qualifier that strengthens a fact ("object-oriented", "in production", "led", "expert"...)
-- a soft skill or personality trait ("rigorous", "autonomous"...) not in the profile
-- a date, place, title, degree detail or award that differs from the profile
+- a date, place, title, degree detail, degree status or award that differs from the profile
 - a purpose or outcome not in the profile ("to meet a business need", "improving efficiency"...)
+- a commitment not in the profile (availability, mobility, working hours, travel, salary...)
+
+ALLOWED (do NOT report): in the "Profile" summary, up to 3 short statements of interest,
+motivation or general personal quality (e.g. "intéressé par la planification",
+"curieux et rigoureux"), as long as it is plausible given the profile and does not imply
+a skill, experience or result the profile does not have. Report it only if it implies
+one (e.g. "passionné de MILP", "expert en planification").
 
 Ignore LaTeX commands, formatting and section titles. Do not report style problems.
 Be strict: when in doubt, report it.

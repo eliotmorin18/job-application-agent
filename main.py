@@ -1,5 +1,6 @@
 import sys
 
+from browser.apply_agent import apply
 from browser.read_job import read_job
 from cv.build_cv import compile_cv, write_cv
 from llm.analyze_job import analyze_job
@@ -18,17 +19,17 @@ def _print_issues(issues: list[dict]) -> None:
 
 def main(url: str) -> None:
 
-    print("1/5 Lecture de l'offre...")
+    print("1/6 Lecture de l'offre...")
     job = read_job(url)
 
-    print("2/5 Analyse de l'offre par Claude...")
+    print("2/6 Analyse de l'offre par Claude...")
     offer = analyze_job(job)
     print(f"    {offer['job_title']} — {offer['company']}")
 
-    print("3/5 Rédaction du CV par Claude...")
+    print("3/6 Rédaction du CV par Claude...")
     cv = generate_cv(offer)
 
-    print("4/5 Vérification du CV contre candidate.yaml...")
+    print("4/6 Vérification du CV contre candidate.yaml...")
     issues = verify_cv(cv)
 
     for attempt in range(1, MAX_CORRECTIONS + 1):
@@ -48,7 +49,7 @@ def main(url: str) -> None:
 
     main_tex = write_cv(cv, offer)
 
-    print("5/5 Compilation LaTeX...")
+    print("5/6 Compilation LaTeX...")
     pdf, pages = compile_cv(main_tex)
 
     print()
@@ -72,6 +73,9 @@ def main(url: str) -> None:
         print(f"\nAttention : le CV fait {pages} pages au lieu d'une.")
 
     print(f"\nCV : {pdf.relative_to(main_tex.parents[3])}")
+
+    print("\n6/6 Candidature dans Chrome...")
+    apply(url, pdf, offer, report_path=main_tex.parent / "a_faire.txt")
 
 
 if __name__ == "__main__":
