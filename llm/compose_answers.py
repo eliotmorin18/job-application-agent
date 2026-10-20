@@ -11,7 +11,9 @@ Provided on stdin:
 - JOB: the structured job offer
 - QUESTIONS: the form questions the candidate had to answer. Each has a number, the field
   label, a kind (text, choice, checkbox, other) and, for choice, the exact list of options.
-- NOTES: what the candidate wrote for each question number (rough, in any language).
+- NOTES: what the candidate wrote, by question number (rough, in any language). Key "0" is a
+  free text where the candidate answered several questions at once: find in it the answer
+  to each question (if a question is not addressed in it, treat it as empty notes).
 
 For each question, return one answer with its number and a status:
 - "ready": you can produce the final value.

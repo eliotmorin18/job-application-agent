@@ -16,6 +16,7 @@ from playwright.sync_api import (
 from browser import questions_file
 from llm.claude_cli import run_claude
 from llm.compose_answers import compose_answers
+from workflows.interaction import Interaction, TerminalInteraction
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -516,8 +517,31 @@ def _read_options(page, element: dict, elements: list[dict]) -> list[str]:
         return []
 
 
-def _fill_loop(context, cv_path: Path, auto_submit: bool, base_info: str, user_answers: list[dict],
-               todo: list[dict], history: list[str]) -> tuple[str, str, str, list[dict]]:
+def _live_page(context, url: str):
+    """
+    L'onglet sur lequel travailler : le plus récent encore ouvert (un clic a pu ouvrir le site
+    de l'entreprise dans un nouvel onglet). Si le candidat a fermé tous les onglets, on rouvre
+    l'offre. Si toute la fenêtre Chrome a été fermée, on le dit clairement.
+    """
+
+    try:
+        pages = [page for page in context.pages if not page.is_closed()]
+        if pages:
+            return pages[-1]
+
+        page = context.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        return page
+    except PlaywrightError:
+        raise RuntimeError(
+            "La fenêtre Chrome de l'agent a été fermée pendant la candidature. "
+            "Clique sur « Réessayer » et laisse la fenêtre ouverte jusqu'à la fin."
+        )
+
+
+def _fill_loop(context, url: str, cv_path: Path, auto_submit: bool, base_info: str, user_answers: list[dict],
+               todo: list[dict], history: list[str], interaction: Interaction,
+               step_key: str) -> tuple[str, str, str, list[dict]]:
     """
     Boucle principale : regarde la page, demande à Claude, exécute. Si le site bloque
     (compte, connexion, captcha), attend que le candidat le fasse puis reprend.
@@ -529,9 +553,15 @@ def _fill_loop(context, cv_path: Path, auto_submit: bool, base_info: str, user_a
 
     for step in range(1, MAX_STEPS + 1):
 
+        if interaction.cancelled():
+            return "cancelled", "", "", elements
+
         # Si un clic a ouvert un nouvel onglet (ex. LinkedIn -> site de l'entreprise), on le suit
-        page = context.pages[-1]
-        page.bring_to_front()
+        page = _live_page(context, url)
+        try:
+            page.bring_to_front()
+        except PlaywrightError:
+            continue  # l'onglet vient d'être fermé : on en prend un autre au tour suivant
         _wait_for_page(page)
 
         text, elements = _snapshot(page)
@@ -548,7 +578,7 @@ def _fill_loop(context, cv_path: Path, auto_submit: bool, base_info: str, user_a
         decision = run_claude(AGENT_PROMPT, stdin_text, AGENT_SCHEMA, timeout=300)
         status = decision["status"]
 
-        print(f"[{step}] {decision['message']}")
+        interaction.step(step_key, "running", decision["message"])
 
         answered = {answer["field"] for answer in user_answers}
         known = {item["field"] for item in todo} | answered
@@ -558,8 +588,8 @@ def _fill_loop(context, cv_path: Path, auto_submit: bool, base_info: str, user_a
             return "done", decision["message"], "", elements
 
         if status == "blocked":
-            if not questions_file.wait_for_ok("    Fais-le dans Chrome."):
-                return "blocked", decision["message"], "", elements
+            if not interaction.wait_for_action(decision["message"]):
+                return "cancelled", decision["message"], "", elements
             history.append(f"candidate did manually: {decision['message']}")
             idle_steps = 0
             continue
@@ -592,15 +622,15 @@ def _fill_loop(context, cv_path: Path, auto_submit: bool, base_info: str, user_a
     return "max_steps", "", "", elements
 
 
-def _ask_candidate(context, todo: list[dict], elements: list[dict], answers_path: Path, title: str,
+def _ask_candidate(context, todo: list[dict], elements: list[dict], interaction: Interaction,
                    candidate_text: str, offer: dict | None) -> tuple[list[dict], list[dict]]:
     """
-    Pose au candidat, dans reponses.md, les questions que l'agent n'a pas pu remplir,
-    transforme ses notes en réponses (avec Claude) et redemande si besoin.
+    Pose au candidat les questions que l'agent n'a pas pu remplir, transforme ses notes
+    en réponses (avec Claude) et redemande si besoin.
     Renvoie (réponses à remplir, questions laissées au candidat).
     """
 
-    page = context.pages[-1]
+    page = _live_page(context, (offer or {}).get("url", "about:blank"))
     by_id = {element["id"]: element for element in elements}
 
     questions = []
@@ -610,28 +640,27 @@ def _ask_candidate(context, todo: list[dict], elements: list[dict], answers_path
             question["options"] = _read_options(page, by_id[item["element_id"]], elements)
         questions.append(question)
 
-    questions_file.write_questions(answers_path, title, questions)
-    questions_file.open_in_editor(answers_path)
-    print(f"\nJ'ai besoin de toi pour {len(questions)} question(s) : réponds dans {answers_path}")
-
     final: dict[int, dict] = {}
     pending = questions
     next_number = len(questions) + 1
+    follow_up = False
 
     while pending:
-        if not questions_file.wait_for_ok("    Écris tes réponses dans le fichier et enregistre-le."):
+        notes = interaction.ask(pending, follow_up)
+        if notes is None:
             break
 
-        notes = questions_file.read_answers(answers_path)
-        print("    Je lis tes réponses...")
         composed = compose_answers(pending, notes, candidate_text, offer)
         by_number = {question["number"]: question for question in pending}
 
         follow_ups = []
+        resolved = []
         for answer in composed:
             question = by_number.get(answer["number"])
             if not question:
                 continue
+
+            original = question.get("original_number", question["number"])
 
             if answer["status"] == "follow_up":
                 # Nouvelle question numérotée, qui garde le champ et les options d'origine
@@ -639,17 +668,16 @@ def _ask_candidate(context, todo: list[dict], elements: list[dict], answers_path
                     **question,
                     "number": next_number,
                     "reason": answer["follow_up"],
-                    "original_number": question.get("original_number", question["number"]),
+                    "original_number": original,
                 })
                 next_number += 1
             else:
-                final[question.get("original_number", question["number"])] = {**question, **answer}
+                final[original] = {**question, **answer}
+                resolved += [question["number"], original]
 
-        if follow_ups:
-            questions_file.append_questions(answers_path, follow_ups)
-            print(f"    J'ai encore {len(follow_ups)} question(s) : regarde en bas du fichier.")
-
+        interaction.answered(resolved)
         pending = follow_ups
+        follow_up = True
 
     to_fill = [
         {"field": q["field"], "element_id": q["element_id"], "kind": q["kind"], "value": q["value"]}
@@ -660,11 +688,12 @@ def _ask_candidate(context, todo: list[dict], elements: list[dict], answers_path
     return to_fill, manual
 
 
-def apply(url: str, cv_path: Path, offer: dict | None = None, report_path: Path | None = None) -> None:
+def apply(url: str, cv_path: Path, offer: dict | None, interaction: Interaction) -> dict:
     """
     Ouvre l'offre dans Chrome et remplit la candidature pas à pas avec Claude.
-    Ce qu'il ne peut pas remplir seul est demandé au candidat dans reponses.md,
+    Ce qu'il ne peut pas remplir seul est demandé au candidat (via `interaction`),
     puis rempli à son tour. Chrome reste ouvert : le candidat relit et clique sur l'envoi.
+    Renvoie le résultat : statut, réponses remplies, ce qui reste au candidat...
     """
 
     candidate_text = CANDIDATE_PATH.read_text(encoding="utf-8")
@@ -691,13 +720,6 @@ def apply(url: str, cv_path: Path, offer: dict | None = None, report_path: Path 
         "=== JOB ===\n" + json.dumps(job_info, indent=2, ensure_ascii=False),
     ])
 
-    # reponses.md va dans le dossier de la candidature (cv/applications/<offre>/)
-    work_dir = report_path.parent if report_path else (
-        cv_path.parent.parent if cv_path.parent.name == "build" else cv_path.parent
-    )
-    answers_path = work_dir / "reponses.md"
-    title = " — ".join(part for part in [job_info["company"], job_info["job_title"]] if part) or url
-
     todo: list[dict] = []
     history: list[str] = []
     user_answers: list[dict] = []
@@ -714,59 +736,87 @@ def apply(url: str, cv_path: Path, offer: dict | None = None, report_path: Path 
         except PlaywrightError:
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-        print("Phase 1 : je remplis tout ce que je peux...")
+        interaction.step("fill_form", "running", "J'ouvre l'offre dans Chrome…")
         status, message, submit_label, elements = _fill_loop(
-            context, cv_path, auto_submit, base_info, user_answers, todo, history,
+            context, url, cv_path, auto_submit, base_info, user_answers, todo, history, interaction, "fill_form",
         )
+        filled_first = sum(1 for line in history if line.startswith("OK"))
+        interaction.step("fill_form", "done", f"{filled_first} action(s) faite(s) dans le formulaire.")
 
         if status == "finished" and todo:
-            print("\nPhase 2 : questions pour toi")
-            user_answers, manual = _ask_candidate(
-                context, todo, elements, answers_path, title, candidate_text, offer,
-            )
+            interaction.step("your_answers", "running", "En attente de tes réponses.")
+            user_answers, manual = _ask_candidate(context, todo, elements, interaction, candidate_text, offer)
+            interaction.step("your_answers", "done", f"{len(user_answers)} réponse(s) de ta part.")
 
-            if user_answers:
-                print("\nPhase 3 : je remplis tes réponses...")
+            if user_answers and not interaction.cancelled():
                 todo[:] = [item for item in manual]
+                interaction.step("fill_answers", "running", "Je remplis tes réponses…")
                 status, message, label, elements = _fill_loop(
-                    context, cv_path, auto_submit, base_info, user_answers, todo, history,
+                    context, url, cv_path, auto_submit, base_info, user_answers, todo, history, interaction, "fill_answers",
                 )
                 submit_label = label or submit_label
-
-            questions_file.append_summary(
-                answers_path,
-                user_answers + [{"field": item["field"], "value": ""} for item in manual],
-            )
+            interaction.step("fill_answers", "done", "Tes réponses sont dans le formulaire." if user_answers else None)
         else:
             manual = todo
+            interaction.step("your_answers", "done", "Aucune question pour toi.")
+            interaction.step("fill_answers", "done", None)
 
         # On se déconnecte de Chrome SANS le fermer : la page reste ouverte pour le candidat
-        filled = sum(1 for line in history if line.startswith("OK"))
 
-    lines = ["=" * 70, "CANDIDATURE — RÉCAPITULATIF", "=" * 70, f"Offre : {url}", f"{filled} action(s) faite(s) par l'agent."]
+    return {
+        "status": status,
+        "message": message,
+        "submit_label": submit_label,
+        "filled": sum(1 for line in history if line.startswith("OK")),
+        "errors": [line[6:] for line in history if line.startswith("ERROR")],
+        "user_answers": user_answers,
+        "manual": [{"field": item["field"], "reason": item["reason"]} for item in manual],
+    }
 
-    if status == "blocked":
-        lines += ["", f"BLOQUÉ : {message}", "Fais-le dans Chrome, puis relance l'agent si besoin."]
+
+def apply_in_terminal(url: str, cv_path: Path, offer: dict | None = None, report_path: Path | None = None) -> None:
+    """Version terminal : questions dans reponses.md, récapitulatif affiché à la fin."""
+
+    # reponses.md va dans le dossier de la candidature (cv/applications/<offre>/)
+    work_dir = report_path.parent if report_path else (
+        cv_path.parent.parent if cv_path.parent.name == "build" else cv_path.parent
+    )
+    answers_path = work_dir / "reponses.md"
+    title = " — ".join(part for part in [(offer or {}).get("company"), (offer or {}).get("job_title")] if part) or url
+
+    result = apply(url, cv_path, offer, TerminalInteraction(answers_path, title))
+    status = result["status"]
+
+    if answers_path.exists():
+        questions_file.append_summary(
+            answers_path,
+            result["user_answers"] + [{"field": item["field"], "value": ""} for item in result["manual"]],
+        )
+
+    lines = ["=" * 70, "CANDIDATURE — RÉCAPITULATIF", "=" * 70, f"Offre : {url}",
+             f"{result['filled']} action(s) faite(s) par l'agent."]
+
+    if status == "cancelled":
+        lines += ["", f"ARRÊTÉ : {result['message'] or 'candidature interrompue.'}"]
     elif status == "done":
         lines += ["", "La page indique que la candidature a été envoyée."]
     elif status == "max_steps":
         lines += ["", f"L'agent s'est arrêté après {MAX_STEPS} étapes sans finir : vérifie la page."]
 
-    if user_answers:
-        lines += ["", f"Tes réponses remplies par l'agent : {len(user_answers)} (détail dans {answers_path})"]
+    if result["user_answers"]:
+        lines += ["", f"Tes réponses remplies par l'agent : {len(result['user_answers'])} (détail dans {answers_path})"]
 
-    if manual:
+    if result["manual"]:
         lines += ["", "À FAIRE PAR TOI dans la page Chrome :"]
-        lines += [f"  - {item['field']} : {item['reason']}" for item in manual]
+        lines += [f"  - {item['field']} : {item['reason']}" for item in result["manual"]]
 
-    errors = [line for line in history if line.startswith("ERROR")]
-    if errors:
+    if result["errors"]:
         lines += ["", "Actions qui ont échoué (à vérifier dans la page) :"]
-        lines += [f"  - {line[6:]}" for line in errors]
+        lines += [f"  - {line}" for line in result["errors"]]
 
     if status != "done":
         lines += ["", "Relis tout le formulaire dans Chrome (l'agent peut se tromper)."]
-        button = f"« {submit_label} »" if submit_label else "le bouton d'envoi"
+        button = f"« {result['submit_label']} »" if result["submit_label"] else "le bouton d'envoi"
         lines.append(f"Puis clique toi-même sur {button}. La page reste ouverte.")
 
     _report(lines, report_path)
@@ -778,4 +828,4 @@ if __name__ == "__main__":
         print('Usage: python -m browser.apply_agent "<URL>" "<chemin du CV .pdf>"')
         sys.exit(1)
 
-    apply(sys.argv[1], Path(sys.argv[2]).resolve())
+    apply_in_terminal(sys.argv[1], Path(sys.argv[2]).resolve())

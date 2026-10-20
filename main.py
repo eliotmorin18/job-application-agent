@@ -1,7 +1,7 @@
 import sys
 
-from browser.apply_agent import apply
-from browser.read_job import read_job
+from browser.apply_agent import apply_in_terminal
+from browser.read_job import normalize_job_url, read_job
 from cv.build_cv import compile_cv, write_cv
 from llm.analyze_job import analyze_job
 from llm.generate_cv import generate_cv
@@ -18,6 +18,8 @@ def _print_issues(issues: list[dict]) -> None:
 
 
 def main(url: str) -> None:
+
+    url = normalize_job_url(url)
 
     print("1/6 Lecture de l'offre...")
     job = read_job(url)
@@ -75,7 +77,7 @@ def main(url: str) -> None:
     print(f"\nCV : {pdf.relative_to(main_tex.parents[3])}")
 
     print("\n6/6 Candidature dans Chrome...")
-    apply(url, pdf, offer, report_path=main_tex.parent / "a_faire.txt")
+    apply_in_terminal(url, pdf, offer, report_path=main_tex.parent / "a_faire.txt")
 
 
 if __name__ == "__main__":

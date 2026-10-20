@@ -1,10 +1,28 @@
 import sys
 import re
+from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import (
     sync_playwright,
     Error as PlaywrightError,
     TimeoutError as PlaywrightTimeoutError,
 )
+
+
+def normalize_job_url(url: str) -> str:
+    """
+    Les pages de recherche LinkedIn (jobs/search-results, jobs/search, jobs/collections...)
+    exigent d'être connecté. L'offre sélectionnée y est donnée par currentJobId :
+    on la remplace par sa page directe, lisible sans connexion.
+    """
+
+    parsed = urlparse(url.strip())
+
+    if "linkedin.com" in parsed.netloc:
+        job_id = parse_qs(parsed.query).get("currentJobId", [None])[0]
+        if job_id and job_id.isdigit():
+            return f"https://www.linkedin.com/jobs/view/{job_id}"
+
+    return url.strip()
 
 
 def clean_text(text: str) -> str:
