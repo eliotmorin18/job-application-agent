@@ -7,7 +7,8 @@ validation restent celles de candidate/profile.py.
 
 Chaque type d'élément (expérience, projet, formation) est décrit une seule fois
 dans ITEM_KINDS ; l'ajout est le même pour tous. Les compétences, langues et
-centres d'intérêt ont leur propre fonction d'ajout. Les sections uniques
+centres d'intérêt ont leurs propres fonctions d'ajout, de modification et de
+suppression. Les sections uniques
 (personal, career, preferences) sont décrites dans SECTION_SPECS et mises à jour
 champ par champ. Toutes partagent la même lecture (_load_for_edit) et le même
 enregistrement sûr (_save).
@@ -16,6 +17,7 @@ Réutilisable par le futur frontend : chaque fonction reçoit des données simpl
 (dict, listes, textes) et renvoie un résultat simple.
 """
 
+import copy
 import io
 import os
 import re
@@ -241,6 +243,8 @@ def _save(path: Path, data, is_saved, what: str) -> None:
     text = _to_text(data)
     try:
         written = validate_profile(pyyaml.safe_load(text))
+    except pyyaml.YAMLError:
+        raise ProfileError([f"{what} produirait un fichier YAML illisible : rien n'a été enregistré."], path)
     except ProfileError as error:
         raise ProfileError(error.problems, path)
     if not is_saved(written):
@@ -671,6 +675,23 @@ def _plain(item) -> dict:
     return {str(key): (list(value) if isinstance(value, list) else str(value)) for key, value in item.items()}
 
 
+def _find_item(kind: ItemKind, profile_data: dict, data, item_id: str) -> int:
+    """
+    Position de l'élément `item_id` dans la liste kind.section du YAML modifiable.
+    Erreur claire s'il n'existe pas (avec les id existants, et une piste pour les
+    anciennes formations sans id).
+    """
+    for position, element in enumerate(data.get(kind.section) or []):
+        if isinstance(element, dict) and element.get("id") == item_id:
+            return position
+
+    known = [element["id"] for element in profile_data[kind.section] if isinstance(element, dict) and element.get("id")]
+    message = f"aucun(e) {kind.label} avec l'id « {item_id} ». Ids existants : {', '.join(known) or 'aucun'}."
+    if any(isinstance(element, dict) and not element.get("id") for element in profile_data[kind.section]):
+        message += " Certain(e)s n'ont pas d'id : utilise assign_missing_ids() pour leur en donner un."
+    raise ItemError(kind.label, [message])
+
+
 def update_item(section: str, item_id: str, changes: dict, path: Path | None = None) -> dict:
     """
     Modifie seulement les champs fournis d'une expérience, d'un projet ou d'une formation,
@@ -689,14 +710,7 @@ def update_item(section: str, item_id: str, changes: dict, path: Path | None = N
     values, cleared = _check_item_fields(kind, changes, partial=True)
 
     path, current, data = _load_for_edit(path)
-
-    item = next((element for element in data.get(section) or [] if isinstance(element, dict) and element.get("id") == item_id), None)
-    if item is None:
-        known = [element["id"] for element in current.data[section] if isinstance(element, dict) and element.get("id")]
-        message = f"aucun(e) {kind.label} avec l'id « {item_id} ». Ids existants : {', '.join(known) or 'aucun'}."
-        if any(isinstance(element, dict) and not element.get("id") for element in current.data[section]):
-            message += " Certain(e)s n'ont pas d'id : utilise assign_missing_ids() pour leur en donner un."
-        raise ItemError(kind.label, [message])
+    item = data[section][_find_item(kind, current.data, data, item_id)]
 
     for field, value in values.items():
         item[field] = value          # champ existant : modifié sur place ; nouveau : ajouté à la fin
@@ -740,3 +754,280 @@ def assign_missing_ids(path: Path | None = None) -> dict:
             "les id de formation",
         )
     return assigned
+
+
+# ---------- Suppression d'un élément ----------
+
+def _last_comment_slot(node):
+    """
+    Où ruamel.yaml range le commentaire écrit après `node` : au plus profond de son dernier
+    élément (ex. après la dernière compétence de la dernière expérience).
+    Renvoie (conteneur, clé ou position, emplacement) ou None.
+    """
+    while True:
+        if isinstance(node, CommentedMap) and node:
+            key, slot = list(node)[-1], 2
+        elif isinstance(node, CommentedSeq) and node:
+            key, slot = len(node) - 1, 0
+        else:
+            return None
+        value = node[key]
+        if isinstance(value, (CommentedMap, CommentedSeq)) and value:
+            node = value
+            continue
+        return node, key, slot
+
+
+def _comment_at(where):
+    if where is None:
+        return None
+    node, key, slot = where
+    entry = node.ca.items.get(key)
+    return entry[slot] if entry and len(entry) > slot else None
+
+
+def _set_comment_at(where, token) -> None:
+    node, key, slot = where
+    entry = node.ca.items.setdefault(key, [None, None, None, None])
+    while len(entry) <= slot:
+        entry.append(None)
+    entry[slot] = token
+
+
+def _split_comment(text: str) -> tuple[str, str]:
+    """« # sur la ligne\n\n# Section suivante\n » -> (« # sur la ligne », « \n\n# Section suivante\n »)."""
+    if text.startswith("#"):
+        end = text.find("\n")
+        return (text, "") if end < 0 else (text[:end], text[end:])
+    return "", text
+
+
+def _element_slot(sequence, position: int):
+    """Où est rangé le commentaire écrit après l'élément n°position d'une liste."""
+    element = sequence[position]
+    if isinstance(element, (CommentedMap, CommentedSeq)) and element:
+        return _last_comment_slot(element)          # liste d'éléments (expériences...)
+    return sequence, position, 0                     # liste de textes (compétences, intérêts...)
+
+
+def _remove_from_list(chain: list, position: int) -> None:
+    """
+    Retire l'élément n°position de la liste chain[-1] (chain = [(conteneur, clé), ...] du
+    niveau le plus haut au plus bas, ex. [(data, "skills"), (skills, "programming")]).
+
+    Si c'est le DERNIER élément, le commentaire et les lignes vides écrits après lui (souvent
+    le titre de la section suivante) lui sont rattachés par ruamel.yaml : on les déplace vers
+    le nouvel élément final, ou, si la liste devient vide, avant la clé suivante (en remontant
+    d'un niveau s'il n'y en a pas).
+    """
+    container, key = chain[-1]
+    sequence = container[key]
+
+    if position == len(sequence) - 1:
+        token = _comment_at(_element_slot(sequence, position))
+        if token is not None:
+            _, trailing = _split_comment(token.value)   # le commentaire sur la ligne disparaît avec l'élément
+            if position > 0:
+                receiver = _element_slot(sequence, position - 1)
+                if receiver is not None:
+                    existing = _comment_at(receiver)
+                    # On part du commentaire déjà présent (s'il y en a un) pour garder son alignement
+                    moved = copy.copy(existing or token)
+                    inline, _ = _split_comment(existing.value) if existing else ("", "")
+                    moved.value = inline + trailing
+                    _set_comment_at(receiver, moved)
+            else:
+                _comment_before_next_key(chain, trailing)
+
+    del sequence[position]
+
+
+def _comment_before_next_key(chain: list, trailing: str) -> None:
+    """La liste devient vide (« clé: [] ») : le commentaire est replacé avant la clé suivante."""
+    lines = trailing.split("\n")[1:]          # la première ligne se terminait après l'élément supprimé
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if any(line.strip() for line in lines):
+        text = "\n".join(re.sub(r"^\s*#\s?", "", line) if line.strip() else "" for line in lines)
+    elif trailing.count("\n") >= 2:
+        text = ""                               # seulement une ligne vide : on la garde
+    else:
+        return
+
+    for depth in range(len(chain) - 1, -1, -1):
+        container, key = chain[depth]
+        keys = list(container)
+        position = keys.index(key)
+        if position + 1 < len(keys):
+            container.yaml_set_comment_before_after_key(keys[position + 1], before=text, indent=2 * depth)
+            return
+
+
+def delete_item(section: str, item_id: str, path: Path | None = None) -> dict:
+    """
+    Supprime une expérience, un projet ou une formation, retrouvé(e) par son id, et renvoie
+    l'élément supprimé. Le reste du profil est conservé, commentaires compris ; la liste peut
+    devenir vide. Pour une ancienne formation sans id : assign_missing_ids() d'abord.
+    Lève ProfileError ou ItemError.
+    """
+
+    kind = _kind_for_section(section)
+    path, current, data = _load_for_edit(path)
+
+    position = _find_item(kind, current.data, data, item_id)
+    removed = _plain(data[section][position])
+
+    _remove_from_list([(data, section)], position)
+
+    _save(
+        path, data,
+        lambda written: all(not (isinstance(e, dict) and e.get("id") == item_id) for e in written[section]),
+        f"la suppression de « {item_id} »",
+    )
+    return removed
+
+
+# ---------- Modification et suppression : compétences, langues, centres d'intérêt ----------
+
+def _position_of(values, wanted: str):
+    """Position de `wanted` dans une liste de textes (« python » = « Python »), ou None."""
+    return next((position for position, value in enumerate(values) if _same(value, wanted)), None)
+
+
+def _skill_category(data, current, category: str):
+    """Nom exact de la catégorie de compétences (retrouvée comme dans add_skill) et sa liste."""
+    category = _clean_text(category, "compétence", "category")
+    skills = data.get("skills") or {}
+    name = next((name for name in skills if _category_key(str(name)) == _category_key(category)), None)
+    if name is None:
+        known = ", ".join(str(name) for name in current.data["skills"]) or "aucune"
+        raise ItemError("compétence", [f"la catégorie « {category} » n'existe pas (catégories : {known})."])
+    if not isinstance(skills[name], list):
+        skills[name] = CommentedSeq()
+    return name, skills[name]
+
+
+def _skill_position(name: str, values, skill: str) -> int:
+    position = _position_of(values, skill)
+    if position is None:
+        raise ItemError("compétence", [f"« {skill} » n'est pas dans la catégorie « {name} » "
+                                       f"(compétences : {', '.join(map(str, values)) or 'aucune'})."])
+    return position
+
+
+def rename_skill(category: str, skill: str, new_name: str, path: Path | None = None) -> str:
+    """
+    Renomme une compétence dans sa catégorie (même position) et renvoie le nouveau nom.
+    Refuse un nom déjà présent dans la catégorie (changer seulement les majuscules est permis).
+    """
+    skill = _clean_text(skill, "compétence", "skill")
+    new_name = _clean_text(new_name, "compétence", "new_name")
+    path, current, data = _load_for_edit(path)
+    name, values = _skill_category(data, current, category)
+
+    position = _skill_position(name, values, skill)
+    duplicate = _position_of(values, new_name)
+    if duplicate is not None and duplicate != position:
+        raise ItemError("compétence", [f"« {new_name} » est déjà dans la catégorie « {name} »."])
+    values[position] = _scalar(new_name)
+
+    _save(path, data, lambda written: (written["skills"].get(name) or [])[position] == new_name,
+          f"la compétence « {new_name} »")
+    return new_name
+
+
+def delete_skill(category: str, skill: str, path: Path | None = None) -> list:
+    """
+    Supprime une compétence de sa catégorie et renvoie les compétences restantes de la
+    catégorie (la liste peut devenir vide ; la catégorie est conservée).
+    """
+    skill = _clean_text(skill, "compétence", "skill")
+    path, current, data = _load_for_edit(path)
+    name, values = _skill_category(data, current, category)
+
+    _remove_from_list([(data, "skills"), (data["skills"], name)], _skill_position(name, values, skill))
+
+    _save(path, data, lambda written: _position_of(written["skills"].get(name) or [], skill) is None,
+          f"la suppression de « {skill} »")
+    return list(load_profile(path).data["skills"][name] or [])
+
+
+def _language_position(current, language: str) -> int:
+    languages = current.data["languages"]
+    position = next((position for position, entry in enumerate(languages)
+                     if isinstance(entry, dict) and _same(entry.get("language"), language)), None)
+    if position is None:
+        known = ", ".join(str(entry.get("language")) for entry in languages if isinstance(entry, dict)) or "aucune"
+        raise ItemError("langue", [f"« {language} » n'est pas dans le profil (langues : {known})."])
+    return position
+
+
+def update_language(language: str, level: str, path: Path | None = None) -> dict:
+    """Change le niveau d'une langue et renvoie {"language": ..., "level": ...}."""
+    language = _clean_text(language, "langue", "language")
+    level = _clean_text(level, "langue", "level")
+    path, current, data = _load_for_edit(path)
+
+    position = _language_position(current, language)
+    data["languages"][position]["level"] = _scalar(level)
+
+    _save(path, data, lambda written: written["languages"][position].get("level") == level,
+          f"le niveau de « {language} »")
+    return dict(load_profile(path).data["languages"][position])
+
+
+def delete_language(language: str, path: Path | None = None) -> dict:
+    """Supprime une langue et renvoie la langue supprimée (la liste peut devenir vide)."""
+    language = _clean_text(language, "langue", "language")
+    path, current, data = _load_for_edit(path)
+
+    position = _language_position(current, language)
+    removed = _plain(data["languages"][position])
+    _remove_from_list([(data, "languages")], position)
+
+    _save(path, data, lambda written: all(not (isinstance(e, dict) and _same(e.get("language"), language))
+                                          for e in written["languages"]),
+          f"la suppression de « {language} »")
+    return removed
+
+
+def _interest_position(values, interest: str) -> int:
+    position = _position_of(values, interest)
+    if position is None:
+        raise ItemError("centre d'intérêt", [f"« {interest} » n'est pas dans les centres d'intérêt "
+                                             f"({', '.join(map(str, values)) or 'aucun'})."])
+    return position
+
+
+def rename_interest(interest: str, new_name: str, path: Path | None = None) -> list:
+    """
+    Renomme un centre d'intérêt (même position, donc même priorité) et renvoie la liste.
+    Refuse un nom déjà présent (changer seulement les majuscules est permis).
+    """
+    interest = _clean_text(interest, "centre d'intérêt", "interest")
+    new_name = _clean_text(new_name, "centre d'intérêt", "new_name")
+    path, current, data = _load_for_edit(path)
+    values = data.get("interests") or []
+
+    position = _interest_position(values, interest)
+    duplicate = _position_of(values, new_name)
+    if duplicate is not None and duplicate != position:
+        raise ItemError("centre d'intérêt", [f"« {new_name} » est déjà dans les centres d'intérêt."])
+    values[position] = _scalar(new_name)
+
+    _save(path, data, lambda written: written["interests"][position] == new_name,
+          f"le centre d'intérêt « {new_name} »")
+    return list(load_profile(path).data["interests"])
+
+
+def delete_interest(interest: str, path: Path | None = None) -> list:
+    """Supprime un centre d'intérêt et renvoie la liste restante (qui peut devenir vide)."""
+    interest = _clean_text(interest, "centre d'intérêt", "interest")
+    path, current, data = _load_for_edit(path)
+    values = data.get("interests") or []
+
+    _remove_from_list([(data, "interests")], _interest_position(values, interest))
+
+    _save(path, data, lambda written: _position_of(written["interests"], interest) is None,
+          f"la suppression de « {interest} »")
+    return list(load_profile(path).data["interests"])

@@ -14,7 +14,8 @@ from unittest import mock
 from candidate import manager
 from candidate.manager import (
     ExperienceError, ItemError, add_education, add_experience, add_interest, add_language, add_project, add_skill,
-    add_preference, assign_missing_ids, update_career, update_item, update_personal, update_preferences,
+    add_preference, assign_missing_ids, delete_interest, delete_item, delete_language, delete_skill, rename_interest,
+    rename_skill, update_career, update_item, update_language, update_personal, update_preferences,
 )
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, ProfileError, load_profile
 
@@ -768,6 +769,344 @@ class UpdateItemTest(unittest.TestCase):
     def test_assign_missing_ids_keeps_ids_unique(self):
         self.path.write_text(MINIMAL + "projects:\n  - id: mit\neducation:\n  - school: MIT\n  - school: MIT\n", encoding="utf-8")
         self.assertEqual(assign_missing_ids(self.path), {1: "mit-2", 2: "mit-3"})
+
+
+COMMENTED = """personal:
+  first_name: Jane
+  last_name: Doe
+
+education:
+  - id: ecole
+    school: Ecole
+
+experiences:
+  - id: a
+    company: A
+    title: X   # note dans A
+
+  - id: b
+    company: B
+    title: Y
+    skills:
+      - Python
+
+# Mes projets
+# deuxième ligne
+projects:
+  - id: p
+    name: P
+"""
+
+
+class DeleteItemTest(unittest.TestCase):
+    """Suppression d'une expérience, d'un projet ou d'une formation."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+        shutil.copy(EXAMPLE_PATH, self.path)
+        self.before_text = self.path.read_text(encoding="utf-8")
+        self.before = load_profile(self.path).data
+
+    def assertOnlyRemoved(self, section, item_id):
+        after = load_profile(self.path).data
+        for name in self.before:
+            if name != section:
+                self.assertEqual(after[name], self.before[name], name)
+        self.assertEqual(after[section], [e for e in self.before[section] if e.get("id") != item_id])
+
+    def assertRejected(self, expected, *args):
+        with self.assertRaises(ItemError) as context:
+            delete_item(*args, self.path)
+        self.assertIn(expected, str(context.exception))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.before_text, "le fichier ne doit pas changer")
+
+    # ---------- les trois types ----------
+
+    def test_delete_experience(self):
+        removed = delete_item("experiences", "example-research-company", self.path)
+        self.assertEqual(removed["company"], "Example Research Company")
+        self.assertOnlyRemoved("experiences", "example-research-company")
+
+    def test_delete_project(self):
+        delete_item("projects", "face-recognition", self.path)
+        self.assertEqual([p["id"] for p in load_profile(self.path).data["projects"]], ["multi-agent-system", "bioinformatics-project"])
+        self.assertOnlyRemoved("projects", "face-recognition")
+
+    def test_delete_education(self):
+        delete_item("education", "example-engineering-school", self.path)
+        self.assertOnlyRemoved("education", "example-engineering-school")
+
+    def test_comments_of_the_example_profile_are_kept(self):
+        for section, item_id in (("experiences", "example-software-company"), ("projects", "bioinformatics-project"),
+                                 ("education", "example-university")):
+            delete_item(section, item_id, self.path)
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("# Situation actuelle du candidat", text)
+        self.assertIn("# Résultats obtenus (chiffrés si possible), distincts des missions ci-dessus", text)
+        self.assertIn("    context: >", text)
+
+    # ---------- dernier élément, liste vide ----------
+
+    def test_delete_every_item_of_each_list(self):
+        for section in ("experiences", "projects", "education"):
+            for item in self.before[section]:
+                delete_item(section, item["id"], self.path)
+            with self.subTest(section=section):
+                self.assertEqual(load_profile(self.path).data[section], [])
+                self.assertIn(f"{section}: []\n", self.path.read_text(encoding="utf-8"))
+        # Le reste du profil est intact
+        after = load_profile(self.path).data
+        for name in ("personal", "career", "skills", "languages", "interests", "preferences", "application_rules"):
+            self.assertEqual(after[name], self.before[name], name)
+
+    def test_comment_after_the_last_item_is_kept(self):
+        self.path.write_text(COMMENTED, encoding="utf-8")
+        delete_item("experiences", "b", self.path)
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("    title: X   # note dans A\n\n# Mes projets\n# deuxième ligne\nprojects:", text)
+
+    def test_blank_line_before_the_next_section_is_kept(self):
+        self.path.write_text(MINIMAL + "\nprojects:\n  - id: a\n    name: A\n\n  - id: b\n    name: B\n\nawards:\n  - name: Prix\n", encoding="utf-8")
+        delete_item("projects", "b", self.path)
+        self.assertIn("    name: A\n\nawards:\n", self.path.read_text(encoding="utf-8"))
+
+    def test_comment_is_kept_when_the_list_becomes_empty(self):
+        self.path.write_text(COMMENTED, encoding="utf-8")
+        delete_item("experiences", "b", self.path)
+        delete_item("experiences", "a", self.path)
+        text = self.path.read_text(encoding="utf-8")
+        self.assertIn("experiences: []\n\n# Mes projets\n# deuxième ligne\nprojects:", text)
+        self.assertEqual(load_profile(self.path).data["projects"], [{"id": "p", "name": "P"}])
+
+    def test_deleting_the_first_item_keeps_everything_else(self):
+        self.path.write_text(COMMENTED, encoding="utf-8")
+        delete_item("experiences", "a", self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), COMMENTED.replace(
+            "  - id: a\n    company: A\n    title: X   # note dans A\n\n", ""))
+
+    # ---------- erreurs ----------
+
+    def test_unknown_id_for_each_type(self):
+        for section, label in (("experiences", "expérience"), ("projects", "projet"), ("education", "formation")):
+            with self.subTest(section=section):
+                self.assertRejected(f"aucun(e) {label} avec l'id « inconnu ». Ids existants : ", section, "inconnu")
+
+    def test_unknown_section(self):
+        self.assertRejected("section inconnue : « interests »", "interests", "tennis")
+
+    def test_old_education_without_id(self):
+        self.path.write_text(MINIMAL + "education:\n  - school: Lycee Saint-Louis\n  - school: MIT\n", encoding="utf-8")
+        with self.assertRaises(ItemError) as context:
+            delete_item("education", "lycee-saint-louis", self.path)
+        self.assertIn("utilise assign_missing_ids()", str(context.exception))
+
+        assign_missing_ids(self.path)
+        delete_item("education", "lycee-saint-louis", self.path)
+        self.assertEqual(load_profile(self.path).data["education"], [{"id": "mit", "school": "MIT"}])
+
+    def test_invalid_profile_is_not_modified(self):
+        broken = "personal:\n  first_name: Jane\nexperiences:\n  - id: a\n    company: A\n"   # nom manquant
+        self.path.write_text(broken, encoding="utf-8")
+        for section, item_id in (("experiences", "a"), ("projects", "x"), ("education", "y")):
+            with self.subTest(section=section):
+                with self.assertRaises(ProfileError):
+                    delete_item(section, item_id, self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), broken)
+
+    def test_file_is_untouched_if_the_result_would_be_unreadable(self):
+        with mock.patch.object(manager, "_to_text", return_value="experiences:\n[]\nprojects:   -\n"):
+            with self.assertRaises(ProfileError) as context:
+                delete_item("projects", "face-recognition", self.path)
+        self.assertIn("YAML illisible", str(context.exception))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.before_text)
+
+
+SIMPLE_SECTIONS = """personal:
+  first_name: Jane
+  last_name: Doe
+
+skills:
+  programming:
+    - Python
+    - SQL   # note SQL
+
+  tools:
+    - Git
+    - Docker
+
+# Langues parlées
+languages:
+  - language: French
+    level: Native
+
+  - language: English
+    level: C1
+
+interests:
+  - Tennis
+  - Chess
+
+# Préférences
+preferences:
+  target_roles:
+    - Data Scientist
+"""
+
+
+class EditSimpleSectionsTest(unittest.TestCase):
+    """Modification et suppression des compétences, langues et centres d'intérêt."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+        self.path.write_text(SIMPLE_SECTIONS, encoding="utf-8")
+        self.before = load_profile(self.path).data
+
+    def text(self) -> str:
+        return self.path.read_text(encoding="utf-8")
+
+    def data(self) -> dict:
+        return load_profile(self.path).data
+
+    def assertOthersUnchanged(self, *changed):
+        after = self.data()
+        for name in self.before:
+            if name not in changed:
+                self.assertEqual(after[name], self.before[name], name)
+
+    def assertRejected(self, expected, function, *args):
+        before = self.text()
+        with self.assertRaises(ItemError) as context:
+            function(*args, self.path)
+        self.assertIn(expected, str(context.exception))
+        self.assertEqual(self.text(), before, "le fichier ne doit pas changer")
+
+    # ---------- compétences ----------
+
+    def test_rename_skill_keeps_its_position(self):
+        self.assertEqual(rename_skill("programming", "python", "Python 3", self.path), "Python 3")
+        self.assertEqual(self.data()["skills"]["programming"], ["Python 3", "SQL"])
+        self.assertEqual(self.data()["skills"]["tools"], ["Git", "Docker"])
+        self.assertOthersUnchanged("skills")
+        self.assertIn("    - SQL   # note SQL", self.text())
+
+    def test_rename_skill_duplicates(self):
+        self.assertRejected("« sql » est déjà dans la catégorie « programming »", rename_skill, "programming", "Python", "sql")
+        rename_skill("Programming", "python", "PYTHON", self.path)   # seulement les majuscules : permis
+        self.assertEqual(self.data()["skills"]["programming"][0], "PYTHON")
+
+    def test_delete_skill(self):
+        self.assertEqual(delete_skill("tools", "git", self.path), ["Docker"])
+        self.assertEqual(self.data()["skills"]["programming"], ["Python", "SQL"])
+        self.assertOthersUnchanged("skills")
+
+    def test_delete_last_skill_of_the_last_category_keeps_the_next_comment(self):
+        delete_skill("tools", "Docker", self.path)
+        self.assertIn("    - Git\n\n# Langues parlées\nlanguages:", self.text())
+        delete_skill("tools", "Git", self.path)
+        self.assertEqual(self.data()["skills"]["tools"], [])
+        self.assertIn("  tools: []\n\n# Langues parlées\nlanguages:", self.text())
+
+    def test_delete_last_skill_of_a_category_in_the_middle(self):
+        delete_skill("programming", "SQL", self.path)     # son commentaire sur la ligne part avec lui
+        self.assertIn("    - Python\n\n  tools:", self.text())
+        self.assertNotIn("# note SQL", self.text())
+        delete_skill("programming", "Python", self.path)
+        self.assertIn("  programming: []\n\n  tools:", self.text())   # la ligne vide entre catégories est gardée
+        self.assertEqual(self.data()["skills"]["tools"], ["Git", "Docker"])
+
+    def test_skill_not_found(self):
+        self.assertRejected("la catégorie « cloud » n'existe pas (catégories : programming, tools)", delete_skill, "cloud", "AWS")
+        self.assertRejected("« Rust » n'est pas dans la catégorie « programming » (compétences : Python, SQL)", rename_skill, "programming", "Rust", "Go")
+        self.assertRejected("« new_name » est obligatoire", rename_skill, "programming", "Python", "  ")
+
+    # ---------- langues ----------
+
+    def test_update_language_level(self):
+        self.assertEqual(update_language("english", "C2 / Bilingual", self.path), {"language": "English", "level": "C2 / Bilingual"})
+        self.assertEqual(self.data()["languages"][0], {"language": "French", "level": "Native"})
+        self.assertOthersUnchanged("languages")
+
+    def test_delete_language(self):
+        self.assertEqual(delete_language("French", self.path), {"language": "French", "level": "Native"})
+        self.assertEqual(self.data()["languages"], [{"language": "English", "level": "C1"}])
+        self.assertOthersUnchanged("languages")
+        self.assertIn("# Langues parlées\nlanguages:", self.text())
+
+    def test_delete_every_language(self):
+        delete_language("English", self.path)
+        delete_language("French", self.path)
+        self.assertEqual(self.data()["languages"], [])
+        self.assertIn("languages: []\n\ninterests:", self.text())
+
+    def test_language_errors(self):
+        self.assertRejected("« German » n'est pas dans le profil (langues : French, English)", update_language, "German", "B1")
+        self.assertRejected("« German » n'est pas dans le profil", delete_language, "German")
+        self.assertRejected("« level » est obligatoire", update_language, "French", "")
+
+    # ---------- centres d'intérêt ----------
+
+    def test_rename_interest_keeps_its_priority(self):
+        self.assertEqual(rename_interest("tennis", "Padel", self.path), ["Padel", "Chess"])
+        self.assertOthersUnchanged("interests")
+
+    def test_rename_interest_duplicate(self):
+        self.assertRejected("« chess » est déjà dans les centres d'intérêt", rename_interest, "Tennis", "chess")
+
+    def test_delete_interest_and_empty_list(self):
+        self.assertEqual(delete_interest("Chess", self.path), ["Tennis"])
+        self.assertIn("  - Tennis\n\n# Préférences\npreferences:", self.text())
+        self.assertEqual(delete_interest("Tennis", self.path), [])
+        self.assertIn("interests: []\n\n# Préférences\npreferences:", self.text())
+        self.assertOthersUnchanged("interests")
+
+    def test_interest_not_found(self):
+        self.assertRejected("« Golf » n'est pas dans les centres d'intérêt (Tennis, Chess)", delete_interest, "Golf")
+        self.assertRejected("« Golf » n'est pas dans les centres d'intérêt", rename_interest, "Golf", "Padel")
+
+    # ---------- commun ----------
+
+    def test_add_functions_still_work_after_edits(self):
+        delete_skill("tools", "Git", self.path)
+        delete_skill("tools", "Docker", self.path)
+        delete_language("English", self.path)
+        delete_interest("Chess", self.path)
+
+        add_skill("Git", "tools", self.path)
+        add_language("English", "C1", self.path)
+        add_interest("Chess", self.path)
+        self.assertEqual(self.data()["skills"]["tools"], ["Git"])
+        self.assertEqual(self.data()["languages"][-1], {"language": "English", "level": "C1"})
+        self.assertEqual(self.data()["interests"], ["Tennis", "Chess"])
+        self.assertIn("# Langues parlées", self.text())
+        self.assertIn("# Préférences", self.text())
+
+    def test_example_profile_comments_are_kept(self):
+        shutil.copy(EXAMPLE_PATH, self.path)
+        before = self.text()
+        rename_skill("programming", "Julia", "Rust", self.path)
+        delete_skill("tools", "Jupyter", self.path)
+        update_language("Spanish", "B1", self.path)
+        delete_language("Spanish", self.path)
+        delete_interest("Guitar", self.path)
+        self.assertIn("# Situation actuelle du candidat", self.text())
+        self.assertIn("# Résultats obtenus (chiffrés si possible), distincts des missions ci-dessus", self.text())
+        removed = set(before.splitlines()) - set(self.text().splitlines())
+        self.assertEqual(removed, {"    - Julia", "    - Jupyter", "  - language: Spanish", "    level: Basic", "  - Guitar"})
+
+    def test_invalid_profile_is_not_modified(self):
+        broken = "personal:\n  first_name: Jane\nskills:\n  tools:\n    - Git\ninterests:\n  - Tennis\n"
+        self.path.write_text(broken, encoding="utf-8")
+        for function, args in ((rename_skill, ("tools", "Git", "Go")), (delete_skill, ("tools", "Git")),
+                               (update_language, ("French", "B1")), (delete_language, ("French",)),
+                               (rename_interest, ("Tennis", "Padel")), (delete_interest, ("Tennis",))):
+            with self.subTest(function=function.__name__):
+                with self.assertRaises(ProfileError):
+                    function(*args, self.path)
+        self.assertEqual(self.text(), broken)
 
 
 if __name__ == "__main__":
