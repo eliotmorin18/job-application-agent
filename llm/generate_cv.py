@@ -2,13 +2,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from candidate.profile import CandidateProfile
 from llm.claude_cli import run_claude
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CANDIDATE_PATH = ROOT / "profile" / "private" / "candidate.yaml"
 TEMPLATE_DIR = ROOT / "cv" / "template"
 REFERENCE_DIR = ROOT / "cv" / "reference"
 
@@ -165,20 +163,22 @@ def _check_selection(cv: dict, candidate: dict) -> None:
 
 def generate_cv(
     offer: dict,
+    profile: CandidateProfile,
     previous_cv: dict | None = None,
     issues: list[dict] | None = None,
     timeout: int = 600,
 ) -> dict[str, Any]:
     """
-    Envoie l'offre structurée + candidate.yaml + template + références à Claude Code
+    Envoie l'offre structurée + le profil candidat (déjà chargé et validé par
+    candidate.profile.load_profile) + template + références à Claude Code
     et renvoie le contenu LaTeX de chaque section du CV.
 
     Si previous_cv et issues sont donnés (sortie de verify_cv), Claude réécrit
     le CV en corrigeant les affirmations non justifiées par le profil.
     """
 
-    candidate_text = CANDIDATE_PATH.read_text(encoding="utf-8")
-    candidate = yaml.safe_load(candidate_text)
+    candidate_text = profile.text
+    candidate = profile.data
 
     parts = [
         "=== JOB OFFER ===\n" + json.dumps(

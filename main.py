@@ -1,6 +1,7 @@
 import sys
 
 from browser.read_job import normalize_job_url, read_job
+from candidate.profile import ProfileError, load_profile
 from cv.build_cv import compile_cv, write_cv
 from llm.analyze_job import analyze_job
 from llm.generate_cv import generate_cv
@@ -18,6 +19,14 @@ def _print_issues(issues: list[dict]) -> None:
 
 def main(url: str) -> None:
 
+    # Charger et vérifier le profil une seule fois, avant le navigateur et Claude :
+    # le même profil sert ensuite à rédiger et à vérifier le CV
+    try:
+        profile = load_profile()
+    except ProfileError as error:
+        print(error)
+        sys.exit(1)
+
     url = normalize_job_url(url)
 
     print("1/5 Lecture de l'offre...")
@@ -28,10 +37,10 @@ def main(url: str) -> None:
     print(f"    {offer['job_title']} — {offer['company']}")
 
     print("3/5 Rédaction du CV par Claude...")
-    cv = generate_cv(offer)
+    cv = generate_cv(offer, profile)
 
     print("4/5 Vérification du CV contre candidate.yaml...")
-    issues = verify_cv(cv)
+    issues = verify_cv(cv, profile)
 
     for attempt in range(1, MAX_CORRECTIONS + 1):
         if not issues:
@@ -40,8 +49,8 @@ def main(url: str) -> None:
         print(f"    {len(issues)} affirmation(s) absente(s) de ton profil, correction {attempt}/{MAX_CORRECTIONS} :")
         _print_issues(issues)
 
-        cv = generate_cv(offer, previous_cv=cv, issues=issues)
-        issues = verify_cv(cv)
+        cv = generate_cv(offer, profile, previous_cv=cv, issues=issues)
+        issues = verify_cv(cv, profile)
 
     cv["verification_issues"] = issues
 

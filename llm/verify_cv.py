@@ -1,7 +1,7 @@
 from typing import Any
 
+from candidate.profile import CandidateProfile
 from llm.claude_cli import run_claude
-from llm.generate_cv import CANDIDATE_PATH
 
 
 VERIFY_PROMPT = """
@@ -61,13 +61,14 @@ VERIFY_SCHEMA = {
 }
 
 
-def verify_cv(cv: dict, timeout: int = 300) -> list[dict[str, Any]]:
+def verify_cv(cv: dict, profile: CandidateProfile, timeout: int = 300) -> list[dict[str, Any]]:
     """
-    Fait relire le CV par Claude, sans l'offre, uniquement contre candidate.yaml.
+    Fait relire le CV par Claude, sans l'offre, uniquement contre le profil candidat
+    (le même que celui utilisé pour rédiger le CV).
     Renvoie la liste des affirmations du CV qui ne sont pas dans le profil.
     """
 
-    candidate_text = CANDIDATE_PATH.read_text(encoding="utf-8")
+    candidate_text = profile.text
 
     sections = "\n\n".join(
         f"--- SECTION: {name} ---\n{content}" for name, content in cv["sections"].items()
