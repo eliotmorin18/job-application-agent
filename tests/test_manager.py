@@ -12,7 +12,10 @@ from pathlib import Path
 from unittest import mock
 
 from candidate import manager
-from candidate.manager import ExperienceError, ItemError, add_education, add_experience, add_project
+from candidate.manager import (
+    ExperienceError, ItemError, add_education, add_experience, add_interest, add_language, add_project, add_skill,
+    add_preference, update_career, update_personal, update_preferences,
+)
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, ProfileError, load_profile
 
 
@@ -296,6 +299,331 @@ class AddEducationTest(unittest.TestCase):
         self.assertIn("« school » est obligatoire", message)
         self.assertIn("AAAA-MM", message)
         self.assertEqual(self.path.read_text(encoding="utf-8"), MINIMAL)
+
+
+class SimpleSectionsTest(unittest.TestCase):
+    """Compétences, langues et centres d'intérêt."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+
+    def example(self) -> Path:
+        shutil.copy(EXAMPLE_PATH, self.path)
+        return self.path
+
+    def minimal(self, extra: str = "") -> Path:
+        self.path.write_text(MINIMAL + extra, encoding="utf-8")
+        return self.path
+
+    def assertRejected(self, function, expected, *args, **kwargs):
+        before = self.path.read_text(encoding="utf-8")
+        with self.assertRaises(ItemError) as context:
+            function(*args, **kwargs)
+        self.assertIn(expected, str(context.exception))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), before, "le fichier ne doit pas changer")
+
+    def assertOnlyLinesAdded(self, before: str):
+        self.assertTrue(set(before.splitlines()) <= set(self.path.read_text(encoding="utf-8").splitlines()))
+
+    # ---------- Compétences ----------
+
+    def test_add_skill_to_existing_category(self):
+        before = self.example().read_text(encoding="utf-8")
+        self.assertEqual(add_skill("Rust", "programming", self.path), "programming")
+        self.assertEqual(load_profile(self.path).data["skills"]["programming"], ["Python", "SQL", "Bash", "Julia", "Rust"])
+        self.assertOnlyLinesAdded(before)
+
+    def test_category_is_found_whatever_its_spelling(self):
+        self.example()
+        self.assertEqual(add_skill("JAX", "Machine Learning", self.path), "machine_learning")
+        self.assertIn("JAX", load_profile(self.path).data["skills"]["machine_learning"])
+
+    def test_unknown_category_needs_create_category(self):
+        self.example()
+        self.assertRejected(add_skill, "la catégorie « Cloud » n'existe pas (catégories : programming, machine_learning", "AWS", "Cloud", self.path)
+        self.assertEqual(add_skill("AWS", "Cloud Platforms", self.path, create_category=True), "cloud_platforms")
+        self.assertEqual(load_profile(self.path).data["skills"]["cloud_platforms"], ["AWS"])
+
+    def test_duplicate_skill_in_same_category_is_rejected(self):
+        self.example()
+        self.assertRejected(add_skill, "« python » est déjà dans la catégorie « programming »", "python", "programming", self.path)
+
+    def test_same_skill_in_another_category_is_allowed(self):
+        self.example()
+        add_skill("Python", "tools", self.path)
+        self.assertIn("Python", load_profile(self.path).data["skills"]["tools"])
+
+    def test_skills_section_absent_or_empty(self):
+        for extra in ("", "skills:\n", "skills: {}\n", "skills:\n  programming:\n"):
+            with self.subTest(extra=extra):
+                self.minimal(extra)
+                add_skill("Python", "programming", self.path, create_category="programming" not in extra)
+                self.assertEqual(load_profile(self.path).data["skills"]["programming"], ["Python"])
+                self.assertIn("skills:\n  programming:\n    - Python\n", self.path.read_text(encoding="utf-8"))
+
+    def test_invalid_skill_values(self):
+        self.example()
+        self.assertRejected(add_skill, "« skill » est obligatoire", "  ", "programming", self.path)
+        self.assertRejected(add_skill, "« category » est obligatoire", "Rust", "", self.path)
+        self.assertRejected(add_skill, "doit contenir des lettres ou des chiffres", "Rust", "!!!", self.path)
+        self.assertRejected(add_skill, "« skill » est obligatoire", None, "programming", self.path)
+
+    def test_ambiguous_skill_is_read_back_as_text(self):
+        self.example()
+        add_skill("yes", "tools", self.path)
+        self.assertIn("yes", load_profile(self.path).data["skills"]["tools"])
+
+    # ---------- Langues ----------
+
+    def test_add_language(self):
+        before = self.example().read_text(encoding="utf-8")
+        self.assertEqual(add_language("German", "B1 / Intermediate", self.path), "German")
+        self.assertEqual(load_profile(self.path).data["languages"][-1], {"language": "German", "level": "B1 / Intermediate"})
+        self.assertOnlyLinesAdded(before)
+
+    def test_duplicate_language_is_rejected(self):
+        self.example()
+        self.assertRejected(add_language, "« spanish » est déjà dans le profil (niveau : Basic)", "spanish", "B2", self.path)
+
+    def test_language_needs_a_level(self):
+        self.example()
+        self.assertRejected(add_language, "« level » est obligatoire", "German", "", self.path)
+        self.assertRejected(add_language, "« language » est obligatoire", "", "B2", self.path)
+
+    def test_languages_section_absent_or_empty(self):
+        for extra in ("", "languages:\n", "languages: []\n"):
+            with self.subTest(extra=extra):
+                self.minimal(extra)
+                add_language("French", "Native", self.path)
+                self.assertEqual(load_profile(self.path).data["languages"], [{"language": "French", "level": "Native"}])
+                self.assertIn("languages:\n  - language: French\n    level: Native\n", self.path.read_text(encoding="utf-8"))
+
+    # ---------- Centres d'intérêt ----------
+
+    def test_add_interest_at_the_end(self):
+        before = self.example().read_text(encoding="utf-8")
+        self.assertEqual(add_interest("  Chess ", self.path), "Chess")
+        self.assertEqual(load_profile(self.path).data["interests"], ["Tennis", "Football", "Running", "Guitar", "Chess"])
+        self.assertOnlyLinesAdded(before)
+
+    def test_duplicate_interest_is_rejected(self):
+        self.example()
+        self.assertRejected(add_interest, "« tennis » est déjà dans les centres d'intérêt", "tennis", self.path)
+
+    def test_invalid_interest(self):
+        self.example()
+        self.assertRejected(add_interest, "« interest » est obligatoire", "", self.path)
+        self.assertRejected(add_interest, "« interest » est obligatoire", ["Chess"], self.path)
+
+    def test_interests_section_absent_or_empty(self):
+        for extra in ("", "interests:\n", "interests: []\n"):
+            with self.subTest(extra=extra):
+                self.minimal(extra)
+                add_interest("Tennis", self.path)
+                self.assertEqual(load_profile(self.path).data["interests"], ["Tennis"])
+
+    # ---------- Commun ----------
+
+    def test_other_sections_and_comments_are_kept(self):
+        before = self.example().read_text(encoding="utf-8")
+        add_skill("Rust", "programming", self.path)
+        add_language("German", "B1", self.path)
+        add_interest("Chess", self.path)
+
+        self.assertOnlyLinesAdded(before)
+        self.assertIn("# Résultats obtenus (chiffrés si possible), distincts des missions ci-dessus", self.path.read_text(encoding="utf-8"))
+        old, new = load_profile(EXAMPLE_PATH).data, load_profile(self.path).data
+        for section in old:
+            if section not in ("skills", "languages", "interests"):
+                self.assertEqual(new[section], old[section], section)
+
+    def test_invalid_profile_is_not_modified(self):
+        self.path.write_text("personal:\n  first_name: Jane\n", encoding="utf-8")
+        for function, args in ((add_skill, ("Python", "programming")), (add_language, ("French", "Native")), (add_interest, ("Tennis",))):
+            with self.subTest(function=function.__name__):
+                with self.assertRaises(ProfileError):
+                    function(*args, self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "personal:\n  first_name: Jane\n")
+
+
+class UpdateSectionsTest(unittest.TestCase):
+    """Informations personnelles, statut et préférences : mise à jour champ par champ."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+
+    def example(self) -> str:
+        shutil.copy(EXAMPLE_PATH, self.path)
+        return self.path.read_text(encoding="utf-8")
+
+    def minimal(self, extra: str = "") -> None:
+        self.path.write_text(MINIMAL + extra, encoding="utf-8")
+
+    def assertRejected(self, function, fields, expected):
+        before = self.path.read_text(encoding="utf-8")
+        with self.assertRaises(ItemError) as context:
+            function(fields, self.path)
+        self.assertIn(expected, str(context.exception))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), before, "le fichier ne doit pas changer")
+
+    def assertOnlyChanged(self, before: str, changed_sections: set):
+        old = load_profile(EXAMPLE_PATH).data
+        new = load_profile(self.path).data
+        for section in old:
+            if section not in changed_sections:
+                self.assertEqual(new[section], old[section], section)
+
+    # ---------- personal ----------
+
+    def test_update_some_personal_fields_only(self):
+        before = self.example()
+        section = update_personal({"city": "Lyon", "phone": "+33 6 11 22 33 44"}, self.path)
+
+        self.assertEqual(section["city"], "Lyon")
+        self.assertEqual(section["phone"], "+33 6 11 22 33 44")
+        self.assertEqual(section["first_name"], "John")   # non fourni : inchangé
+        self.assertEqual(section["email"], "john.doe@example.com")
+        self.assertOnlyChanged(before, {"personal"})
+        self.assertIn("# Situation actuelle du candidat", self.path.read_text(encoding="utf-8"))
+
+    def test_new_personal_field_and_empty_fields(self):
+        self.minimal()
+        section = update_personal({"email": "jane@example.com", "linkedin": "", "github": None}, self.path)
+        self.assertEqual(section, {"first_name": "Jane", "last_name": "Doe", "email": "jane@example.com", "linkedin": "", "github": ""})
+
+    def test_values_keep_their_type(self):
+        self.example()
+        section = update_personal({"postal_code": "75116", "birth_date": "2001-06-18"}, self.path)
+        self.assertEqual(section["postal_code"], "75116")   # pas le nombre 75116
+        self.assertEqual(section["birth_date"], "2001-06-18")  # pas une date
+        self.assertIn('birth_date: "2001-06-18"', self.path.read_text(encoding="utf-8"))
+
+    def test_invalid_personal_values(self):
+        self.example()
+        cases = [
+            ({"first_name": ""}, "« first_name » est obligatoire et ne peut pas être vidé"),
+            ({"last_name": None}, "« last_name » est obligatoire"),
+            ({"email": "john.example.com"}, "n'est pas une adresse e-mail valide"),
+            ({"linkedin": "linkedin.com/in/john"}, "« linkedin » doit commencer par http"),
+            ({"birth_date": "18/06/2001"}, "AAAA-MM-JJ"),
+            ({"phone": 612345678}, "« phone » doit être un texte"),
+            ({"website": "https://john.dev"}, "champ(s) inconnu(s) : website"),
+            ({}, "aucun champ à mettre à jour"),
+        ]
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                self.assertRejected(update_personal, fields, expected)
+
+    # ---------- career ----------
+
+    def test_update_career(self):
+        before = self.example()
+        section = update_career({"academic_status": "student", "graduation_date": "2027-06"}, self.path)
+        self.assertEqual(section, {"academic_status": "student", "employment_status": "job_seeking", "graduation_date": "2027-06"})
+        # Le commentaire en fin de ligne est conservé
+        self.assertIn("academic_status: student", self.path.read_text(encoding="utf-8"))
+        self.assertIn("# student | graduated", self.path.read_text(encoding="utf-8"))
+        self.assertOnlyChanged(before, {"career"})
+
+    def test_career_section_is_created_after_personal(self):
+        # Comme le profil privé : pas de section career
+        self.minimal("education:\n  - school: X\ninterests:\n  - Tennis\n")
+        update_career({"employment_status": "employed"}, self.path)
+
+        text = self.path.read_text(encoding="utf-8")
+        self.assertLess(text.index("personal:"), text.index("career:"))
+        self.assertLess(text.index("career:"), text.index("education:"))
+        self.assertEqual(load_profile(self.path).data["career"], {"employment_status": "employed"})
+
+    def test_empty_career_section(self):
+        for extra in ("career:\n", "career: {}\n"):
+            with self.subTest(extra=extra):
+                self.minimal(extra)
+                update_career({"academic_status": "graduated"}, self.path)
+                self.assertEqual(load_profile(self.path).data["career"], {"academic_status": "graduated"})
+
+    def test_invalid_career_values(self):
+        self.example()
+        self.assertRejected(update_career, {"academic_status": "diplômé"}, "« academic_status » doit valoir student, graduated")
+        self.assertRejected(update_career, {"employment_status": "chômage"}, "« employment_status » doit valoir employed")
+        self.assertRejected(update_career, {"graduation_date": "juin 2026"}, "AAAA-MM")
+
+    # ---------- preferences ----------
+
+    def test_update_preferences_replaces_given_lists(self):
+        before = self.example()
+        section = update_preferences({"preferred_locations": ["Lyon", "lyon", " Remote ", ""]}, self.path)
+        self.assertEqual(section["preferred_locations"], ["Lyon", "Remote"])   # doublons et vides retirés
+        self.assertEqual(section["target_roles"][0], "Computer Vision Engineer")  # non fourni : inchangé
+        self.assertOnlyChanged(before, {"preferences"})
+
+    def test_preferences_absent_or_emptied(self):
+        self.minimal()
+        update_preferences({"target_roles": ["Data Scientist"]}, self.path)
+        update_preferences({"employment_types": []}, self.path)
+        self.assertEqual(load_profile(self.path).data["preferences"], {"target_roles": ["Data Scientist"], "employment_types": []})
+
+    def test_invalid_preferences(self):
+        self.example()
+        self.assertRejected(update_preferences, {"target_roles": "Data Scientist"}, "« target_roles » doit être une liste de textes")
+        self.assertRejected(update_preferences, {"salary": ["50k"]}, "champ(s) inconnu(s) : salary")
+
+    # ---------- add_preference : ajoute sans rien retirer ----------
+
+    def test_add_preference_keeps_existing_values(self):
+        before = self.example()
+        values = add_preference("employment_types", "Internship", self.path)
+        self.assertEqual(values, ["Full-time", "Internship"])
+        self.assertEqual(load_profile(self.path).data["preferences"]["target_roles"][0], "Computer Vision Engineer")
+        self.assertTrue(set(before.splitlines()) <= set(self.path.read_text(encoding="utf-8").splitlines()))
+        self.assertOnlyChanged(before, {"preferences"})
+
+    def test_add_preference_versus_update_preferences(self):
+        # add_preference ajoute ; update_preferences remplace la liste
+        self.example()
+        self.assertEqual(add_preference("preferred_locations", "Lyon", self.path), ["Paris", "Remote", "Lyon"])
+        self.assertEqual(update_preferences({"preferred_locations": ["Lyon"]}, self.path)["preferred_locations"], ["Lyon"])
+
+    def test_add_preference_duplicate_is_rejected(self):
+        self.example()
+        self.assertRejected(lambda fields, path: add_preference("preferred_locations", fields, path), "  paris ", "« paris » est déjà dans « preferred_locations »")
+
+    def test_add_preference_invalid_values(self):
+        self.example()
+        self.assertRejected(lambda fields, path: add_preference("salary", fields, path), "50k", "catégorie inconnue : « salary »")
+        self.assertRejected(lambda fields, path: add_preference("target_roles", fields, path), "", "« value » est obligatoire")
+        self.assertRejected(lambda fields, path: add_preference("target_roles", fields, path), ["AI Engineer"], "« value » est obligatoire")
+
+    def test_add_preference_with_absent_or_empty_section(self):
+        for extra in ("", "preferences:\n", "preferences: {}\n", "preferences:\n  target_roles:\n", "preferences:\n  target_roles: []\n"):
+            with self.subTest(extra=extra):
+                self.minimal(extra)
+                self.assertEqual(add_preference("target_roles", "Data Scientist", self.path), ["Data Scientist"])
+                self.assertIn("preferences:\n  target_roles:\n    - Data Scientist\n", self.path.read_text(encoding="utf-8"))
+
+    # ---------- commun ----------
+
+    def test_invalid_profile_is_not_modified(self):
+        self.path.write_text("personal:\n  first_name: Jane\n", encoding="utf-8")
+        for function, fields in ((update_personal, {"city": "Lyon"}), (update_career, {"academic_status": "student"}),
+                                 (update_preferences, {"target_roles": ["X"]})):
+            with self.subTest(function=function.__name__):
+                with self.assertRaises(ProfileError):
+                    function(fields, self.path)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "personal:\n  first_name: Jane\n")
+
+    def test_updated_profile_still_works_for_the_generator(self):
+        self.example()
+        update_personal({"city": "Lyon"}, self.path)
+        update_career({"academic_status": "student"}, self.path)
+        update_preferences({"target_roles": ["AI Engineer"]}, self.path)
+        profile = load_profile(self.path)
+        self.assertEqual(profile.data["personal"]["first_name"], "John")
+        self.assertIn("academic_status: student", profile.text)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,11 @@ et la mise en forme du fichier (PyYAML les effacerait). La lecture et la
 validation restent celles de candidate/profile.py.
 
 Chaque type d'élément (expérience, projet, formation) est décrit une seule fois
-dans ITEM_KINDS ; l'ajout est le même pour tous.
+dans ITEM_KINDS ; l'ajout est le même pour tous. Les compétences, langues et
+centres d'intérêt ont leur propre fonction d'ajout. Les sections uniques
+(personal, career, preferences) sont décrites dans SECTION_SPECS et mises à jour
+champ par champ. Toutes partagent la même lecture (_load_for_edit) et le même
+enregistrement sûr (_save).
 
 Réutilisable par le futur frontend : chaque fonction reçoit des données simples
 (dict, listes, textes) et renvoie un résultat simple.
@@ -198,6 +202,54 @@ def _write_atomically(path: Path, text: str) -> None:
     os.replace(temporary_path, path)
 
 
+def _load_for_edit(path: Path | None):
+    """
+    Le profil actuel, qui doit être lisible et valide (sinon on ne l'aggrave pas), et sa
+    version modifiable (ruamel.yaml, qui garde commentaires et mise en forme).
+    """
+    path = Path(path) if path else profile_module.CANDIDATE_PATH
+    current = load_profile(path)
+    data = _yaml().load(path.read_text(encoding="utf-8"))
+    return path, current, data
+
+
+def _save(path: Path, data, is_saved, what: str) -> None:
+    """
+    Enregistre `data`. Le texte exact qui va être écrit est relu comme le fera le pipeline
+    (PyYAML) : il doit être valide et `is_saved(profil relu)` doit être vrai, sinon le
+    fichier n'est pas touché.
+    """
+    text = _to_text(data)
+    try:
+        written = validate_profile(pyyaml.safe_load(text))
+    except ProfileError as error:
+        raise ProfileError(error.problems, path)
+    if not is_saved(written):
+        raise ProfileError([f"{what} ne serait pas relu(e) correctement : rien n'a été enregistré."], path)
+    _write_atomically(path, text)
+
+
+def _list_section(data, section: str) -> CommentedSeq:
+    """
+    La liste `section` du YAML modifiable. Absente, sans valeur ou « [] » écrit sur une
+    ligne : on part d'une liste vide classique (une « - » par élément).
+    """
+    if not data.get(section):
+        data[section] = CommentedSeq()
+    return data[section]
+
+
+def _clean_text(value, label: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ItemError(label, [f"« {field} » est obligatoire et doit être un texte non vide."])
+    return value.strip()
+
+
+def _same(a, b) -> bool:
+    """Comparaison qui ignore majuscules et espaces : « python » = « Python »."""
+    return isinstance(a, str) and isinstance(b, str) and a.strip().casefold() == b.strip().casefold()
+
+
 def _existing_ids(profile_data: dict) -> set[str]:
     """Tous les id déjà utilisés dans le profil (expériences, projets, formations)."""
     return {
@@ -217,12 +269,9 @@ def _add_item(kind: ItemKind, fields: dict, path: Path | None) -> str:
     sinon rien n'est écrit. Lève ProfileError ou ItemError.
     """
 
-    path = Path(path) if path else profile_module.CANDIDATE_PATH
+    path, current, data = _load_for_edit(path)
 
-    # 1. Le profil actuel doit être lisible et valide (sinon on ne l'aggrave pas)
-    current = load_profile(path)
-
-    # 2. Le nouvel élément, nettoyé, avec un id unique
+    # Le nouvel élément, nettoyé, avec un id unique
     item = _clean_item(kind, fields)
     new_id = _unique_id(_slug(item[kind.id_from]), _existing_ids(current.data), fallback=_slug(kind.label))
 
@@ -230,25 +279,13 @@ def _add_item(kind: ItemKind, fields: dict, path: Path | None) -> str:
     entry["id"] = _scalar(new_id)
     entry.update(item)
 
-    # 3. Ajout dans le fichier, en conservant commentaires et mise en forme.
-    #    Section absente, sans valeur ou « [] » écrit sur une ligne : on part d'une liste
-    #    vide classique (une « - » par élément)
-    data = _yaml().load(path.read_text(encoding="utf-8"))
-    if not data.get(kind.section):
-        data[kind.section] = CommentedSeq()
-    data[kind.section].append(entry)
+    _list_section(data, kind.section).append(entry)
 
-    # 4. Le texte exact qui va être écrit est relu comme le fera le pipeline (PyYAML) :
-    #    il doit être valide et contenir le nouvel élément, sinon le fichier n'est pas touché
-    text = _to_text(data)
-    try:
-        written = validate_profile(pyyaml.safe_load(text))
-    except ProfileError as error:
-        raise ProfileError(error.problems, path)
-    if new_id not in {element.get("id") for element in written[kind.section] if isinstance(element, dict)}:
-        raise ProfileError([f"{kind.label} « {new_id} » ne serait pas relu(e) correctement : rien n'a été enregistré."], path)
-
-    _write_atomically(path, text)
+    _save(
+        path, data,
+        lambda written: new_id in {element.get("id") for element in written[kind.section] if isinstance(element, dict)},
+        f"{kind.label} « {new_id} »",
+    )
     return new_id
 
 
@@ -277,3 +314,324 @@ def add_education(fields: dict, path: Path | None = None) -> str:
     location (textes) ; details (liste).
     """
     return _add_item(ITEM_KINDS["education"], fields, path)
+
+
+def _category_key(text: str) -> str:
+    """Nom de catégorie au format du profil : « Machine Learning » -> « machine_learning »."""
+    return _slug(text).replace("-", "_")
+
+
+def add_skill(skill: str, category: str, path: Path | None = None, create_category: bool = False) -> str:
+    """
+    Ajoute une compétence dans une catégorie de `skills` (ex. « Python » dans
+    « programming ») et renvoie le nom de la catégorie utilisée.
+
+    La catégorie est retrouvée sans tenir compte des majuscules ni des espaces
+    (« Machine Learning » = « machine_learning »). Si elle n'existe pas, elle n'est créée
+    que si `create_category=True` (pour éviter qu'une faute de frappe crée une catégorie).
+    Refuse une compétence déjà présente dans la catégorie.
+    """
+
+    skill = _clean_text(skill, "compétence", "skill")
+    category = _clean_text(category, "compétence", "category")
+    key = _category_key(category)
+    if not key:
+        raise ItemError("compétence", [f"le nom de catégorie « {category} » doit contenir des lettres ou des chiffres."])
+
+    path, current, data = _load_for_edit(path)
+
+    if not isinstance(data.get("skills"), dict) or not data.get("skills"):
+        data["skills"] = CommentedMap()
+    skills = data["skills"]
+
+    existing = next((name for name in skills if _category_key(str(name)) == key), None)
+    if existing is None:
+        if not create_category:
+            known = ", ".join(str(name) for name in skills) or "aucune"
+            raise ItemError("compétence", [
+                f"la catégorie « {category} » n'existe pas (catégories : {known}). "
+                "Utilise create_category=True pour la créer."
+            ])
+        existing = key
+        skills[existing] = CommentedSeq()
+    elif not isinstance(skills[existing], list) or not skills[existing]:
+        skills[existing] = CommentedSeq()
+
+    if any(_same(item, skill) for item in skills[existing]):
+        raise ItemError("compétence", [f"« {skill} » est déjà dans la catégorie « {existing} »."])
+    skills[existing].append(_scalar(skill))
+
+    _save(
+        path, data,
+        lambda written: any(_same(item, skill) for item in written["skills"].get(existing) or []),
+        f"la compétence « {skill} »",
+    )
+    return existing
+
+
+def add_language(language: str, level: str, path: Path | None = None) -> str:
+    """
+    Ajoute une langue avec son niveau (ex. « Spanish », « Intermediate » ou « B2 ») et
+    renvoie le nom de la langue. Refuse une langue déjà présente.
+    """
+
+    language = _clean_text(language, "langue", "language")
+    level = _clean_text(level, "langue", "level")
+
+    path, current, data = _load_for_edit(path)
+
+    for entry in current.data["languages"]:
+        if isinstance(entry, dict) and _same(entry.get("language"), language):
+            raise ItemError("langue", [f"« {language} » est déjà dans le profil (niveau : {entry.get('level')})."])
+
+    entry = CommentedMap()
+    entry["language"] = _scalar(language)
+    entry["level"] = _scalar(level)
+    _list_section(data, "languages").append(entry)
+
+    _save(
+        path, data,
+        lambda written: any(isinstance(e, dict) and _same(e.get("language"), language) for e in written["languages"]),
+        f"la langue « {language} »",
+    )
+    return language
+
+
+def add_interest(interest: str, path: Path | None = None) -> str:
+    """
+    Ajoute un centre d'intérêt à la fin de la liste (l'ordre est la priorité : les
+    premiers sont utilisés en premier dans le CV) et le renvoie. Refuse un doublon.
+    """
+
+    interest = _clean_text(interest, "centre d'intérêt", "interest")
+
+    path, current, data = _load_for_edit(path)
+
+    if any(_same(item, interest) for item in current.data["interests"]):
+        raise ItemError("centre d'intérêt", [f"« {interest} » est déjà dans les centres d'intérêt."])
+    _list_section(data, "interests").append(_scalar(interest))
+
+    _save(
+        path, data,
+        lambda written: any(_same(item, interest) for item in written["interests"]),
+        f"le centre d'intérêt « {interest} »",
+    )
+    return interest
+
+
+# ---------- Sections uniques : informations personnelles, statut, préférences ----------
+
+BIRTH_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")  # "2001-06-18"
+
+# Ordre des sections dans le profil : une section créée est placée au bon endroit
+SECTION_ORDER = ["personal", "career", "education", "experiences", "projects", "awards", "skills",
+                 "languages", "interests", "preferences", "form_answers", "application_rules"]
+
+
+@dataclass(frozen=True)
+class SectionSpec:
+    """Une section unique du profil (sans id) et le type de chacun de ses champs."""
+
+    section: str
+    label: str
+    fields: dict             # champ -> type : "text", "email", "url", "birth_date", "month", "list" ou tuple de choix
+    required: tuple[str, ...] = ()
+
+
+SECTION_SPECS = {
+    "personal": SectionSpec(
+        section="personal",
+        label="informations personnelles",
+        fields={
+            "first_name": "text", "last_name": "text", "email": "email", "phone": "text",
+            "birth_date": "birth_date", "gender": "text", "nationality": "text", "address": "text",
+            "postal_code": "text", "city": "text", "country": "text", "linkedin": "url", "github": "url",
+        },
+        required=("first_name", "last_name"),
+    ),
+    "career": SectionSpec(
+        section="career",
+        label="statut",
+        fields={
+            "academic_status": ("student", "graduated"),
+            "employment_status": ("employed", "job_seeking", "internship", "freelance", "other"),
+            "graduation_date": "month",
+        },
+    ),
+    "preferences": SectionSpec(
+        section="preferences",
+        label="préférences",
+        fields={"target_roles": "list", "preferred_locations": "list", "employment_types": "list"},
+    ),
+}
+
+
+def _clean_section_fields(spec: SectionSpec, fields: dict) -> dict:
+    """
+    Vérifie les champs fournis. Un champ fourni vide ("", None, []) est enregistré vide,
+    sauf les champs obligatoires. Renvoie {champ: valeur à écrire}.
+    """
+
+    problems = []
+
+    if not isinstance(fields, dict) or not fields:
+        raise ItemError(spec.label, ["aucun champ à mettre à jour."])
+
+    unknown = sorted(set(fields) - set(spec.fields))
+    if unknown:
+        problems.append(f"champ(s) inconnu(s) : {', '.join(unknown)}. Champs possibles : {', '.join(spec.fields)}.")
+
+    cleaned = {}
+    for field, kind in spec.fields.items():
+        if field not in fields:
+            continue
+        value = fields[field]
+
+        if kind == "list":
+            if value is None:
+                value = []
+            if isinstance(value, str) or not all(isinstance(entry, str) for entry in value):
+                problems.append(f"« {field} » doit être une liste de textes.")
+                continue
+            entries = []
+            for entry in (entry.strip() for entry in value):
+                if entry and not any(_same(entry, kept) for kept in entries):
+                    entries.append(entry)
+            cleaned[field] = CommentedSeq(_scalar(entry) for entry in entries)
+            continue
+
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            problems.append(f"« {field} » doit être un texte.")
+            continue
+        value = value.strip()
+
+        if not value:
+            if field in spec.required:
+                problems.append(f"« {field} » est obligatoire et ne peut pas être vidé.")
+            else:
+                cleaned[field] = DoubleQuotedScalarString("")
+            continue
+
+        if isinstance(kind, tuple) and value not in kind:
+            problems.append(f"« {field} » doit valoir {', '.join(kind)} (reçu : « {value} »).")
+        elif kind == "email" and ("@" not in value or " " in value):
+            problems.append(f"« {field} » n'est pas une adresse e-mail valide (reçu : « {value} »).")
+        elif kind == "url" and not value.startswith(("http://", "https://")):
+            problems.append(f"« {field} » doit commencer par http:// ou https:// (reçu : « {value} »).")
+        elif kind == "birth_date" and not BIRTH_DATE_PATTERN.match(value):
+            problems.append(f"« {field} » doit avoir la forme « AAAA-MM-JJ » (reçu : « {value} »).")
+        elif kind == "month" and not DATE_PATTERN.match(value):
+            problems.append(f"« {field} » doit avoir la forme « AAAA » ou « AAAA-MM » (reçu : « {value} »).")
+        else:
+            cleaned[field] = _scalar(value, quote=kind in ("birth_date", "month"))
+
+    if problems:
+        raise ItemError(spec.label, problems)
+
+    return cleaned
+
+
+def _section_map(data, section: str) -> CommentedMap:
+    """
+    La section `section` du YAML modifiable. Sans valeur ou « {} » : remplacée sur place.
+    Absente : créée à sa place habituelle dans le profil (ex. career juste après personal).
+    """
+    value = data.get(section)
+    if isinstance(value, dict) and value:
+        return value
+
+    new_section = CommentedMap()
+    if section in data:
+        data[section] = new_section
+        return new_section
+
+    previous = SECTION_ORDER[:SECTION_ORDER.index(section)]
+    keys = list(data)
+    position = max((keys.index(key) + 1 for key in previous if key in data), default=len(keys))
+    data.insert(position, section, new_section)
+    return new_section
+
+
+def _update_section(spec: SectionSpec, fields: dict, path: Path | None) -> dict:
+    """
+    Met à jour seulement les champs fournis de la section et renvoie la section enregistrée.
+    Les autres champs, sections et commentaires sont conservés. Lève ProfileError ou ItemError.
+    """
+
+    cleaned = _clean_section_fields(spec, fields)
+    path, current, data = _load_for_edit(path)
+
+    section = _section_map(data, spec.section)
+    for field, value in cleaned.items():
+        section[field] = value
+
+    expected = {field: (list(value) if isinstance(value, list) else str(value)) for field, value in cleaned.items()}
+    _save(
+        path, data,
+        lambda written: all(written[spec.section].get(field) == value for field, value in expected.items()),
+        f"la mise à jour de « {spec.section} »",
+    )
+    return dict(load_profile(path).data[spec.section])
+
+
+def update_personal(fields: dict, path: Path | None = None) -> dict:
+    """
+    Met à jour les informations personnelles fournies (ex. {"phone": "+33 6 ...", "city": "Lyon"})
+    et renvoie la section. first_name et last_name ne peuvent pas être vidés.
+    Champs : first_name, last_name, email, phone, birth_date (AAAA-MM-JJ), gender, nationality,
+    address, postal_code, city, country, linkedin, github (URL).
+    """
+    return _update_section(SECTION_SPECS["personal"], fields, path)
+
+
+def update_career(fields: dict, path: Path | None = None) -> dict:
+    """
+    Met à jour le statut du candidat et renvoie la section (créée si elle n'existe pas).
+    Champs : academic_status (student | graduated), employment_status (employed | job_seeking |
+    internship | freelance | other), graduation_date (AAAA ou AAAA-MM).
+    """
+    return _update_section(SECTION_SPECS["career"], fields, path)
+
+
+def update_preferences(fields: dict, path: Path | None = None) -> dict:
+    """
+    REMPLACE des listes de préférences et renvoie la section : chaque liste fournie remplace
+    entièrement l'ancienne (doublons retirés) ; les listes non fournies sont inchangées.
+    Pour ajouter une seule valeur sans toucher aux autres : add_preference().
+    Champs : target_roles, preferred_locations, employment_types.
+    """
+    return _update_section(SECTION_SPECS["preferences"], fields, path)
+
+
+def add_preference(category: str, value: str, path: Path | None = None) -> list:
+    """
+    AJOUTE une valeur à la fin d'une liste de préférences, en conservant les valeurs
+    existantes, et renvoie la liste enregistrée. Refuse un doublon (« paris » = « Paris »).
+    Pour remplacer toute une liste : update_preferences().
+    Catégories : target_roles, preferred_locations, employment_types.
+    """
+
+    spec = SECTION_SPECS["preferences"]
+    if category not in spec.fields:
+        raise ItemError(spec.label, [f"catégorie inconnue : « {category} ». Catégories possibles : {', '.join(spec.fields)}."])
+    value = _clean_text(value, spec.label, "value")
+
+    path, current, data = _load_for_edit(path)
+
+    existing = current.data["preferences"].get(category) or []
+    if any(_same(item, value) for item in existing):
+        raise ItemError(spec.label, [f"« {value} » est déjà dans « {category} »."])
+
+    section = _section_map(data, "preferences")
+    if not isinstance(section.get(category), list) or not section.get(category):
+        section[category] = CommentedSeq()
+    section[category].append(_scalar(value))
+
+    _save(
+        path, data,
+        lambda written: any(_same(item, value) for item in written["preferences"].get(category) or []),
+        f"la préférence « {value} »",
+    )
+    return list(load_profile(path).data["preferences"][category])
