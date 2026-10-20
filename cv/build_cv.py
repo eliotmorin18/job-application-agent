@@ -93,7 +93,16 @@ def compile_cv(main_tex: Path, timeout: int = 180) -> tuple[Path, int]:
         raise RuntimeError(f"La compilation LaTeX a échoué ({main_tex}) :\n{details}")
 
     log = (main_tex.parent / "build" / main_tex.with_suffix(".log").name).read_text(errors="ignore")
-    match = re.search(r"Output written on .*?\((\d+) pages?", log, re.DOTALL)
-    pages = int(match.group(1)) if match else 0
 
-    return pdf, pages
+    return pdf, _count_pages(log)
+
+
+def _count_pages(log: str) -> int:
+    """
+    Nombre de pages lu dans le journal LaTeX ("Output written on X.pdf (1 page, ...)").
+    LaTeX coupe ses lignes à 79 caractères : selon la longueur du nom du PDF, un retour
+    à la ligne peut tomber entre le chiffre et « page ». Renvoie 0 si rien n'est trouvé.
+    """
+
+    match = re.search(r"Output written on .*?\(\s*(\d+)\s+pages?", log, re.DOTALL)
+    return int(match.group(1)) if match else 0
