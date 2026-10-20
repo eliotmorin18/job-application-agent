@@ -704,6 +704,13 @@ class UpdateItemTest(unittest.TestCase):
             self.assertNotIn(field, item)
         self.assertNothingElseChanged("projects", "multi-agent-system", {"github_url", "achievements", "context"})
 
+    def test_dates_with_different_precision(self):
+        self.assertRejected("« end_date » est avant « start_date »", "experiences", "example-research-company", {"end_date": "2025"})
+        self.assertRejected("« end_date » est avant « start_date »", "experiences", "example-research-company", {"end_date": "2026-01"})
+        # « 2026 » (année seule) n'est pas avant « 2026-02 » : on compare les années
+        item = update_item("experiences", "example-research-company", {"end_date": "2026"}, self.path)
+        self.assertEqual((item["start_date"], item["end_date"]), ("2026-02", "2026"))
+
     def test_new_optional_field_can_be_added(self):
         item = update_item("education", "example-engineering-school", {"location": "Palaiseau, France"}, self.path)
         self.assertEqual(item["location"], "Palaiseau, France")

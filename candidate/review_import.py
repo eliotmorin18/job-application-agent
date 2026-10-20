@@ -128,7 +128,7 @@ def _match_item(section: str, extracted: dict, existing: list[dict]) -> tuple[st
     name_field, second_field = MATCH_FIELDS[section]
     matches = []
 
-    for item in existing:
+    for position, item in enumerate(existing, start=1):
         if not isinstance(item, dict):
             continue
         name, other = extracted.get(name_field), item.get(name_field)
@@ -162,6 +162,7 @@ def _match_item(section: str, extracted: dict, existing: list[dict]) -> tuple[st
 
         matches.append({
             "id": item.get("id"),                 # id existant, conservé tel quel (peut manquer : anciennes formations)
+            "position": position,                 # place dans la liste du profil (1, 2...) : vise une formation sans id
             "level": level,
             "score": score,
             "reasons": reasons,
@@ -299,6 +300,9 @@ def review_import(json_path, profile_path: Path | None = None) -> dict:
     review["skills"] = _review_skills(extracted.get("skills") or {}, profile["skills"])
     review["languages"] = _review_languages(extracted.get("languages") or [], profile["languages"])
     review["interests"] = _review_interests(extracted.get("interests") or [], profile["interests"])
+    for section in ("skills", "languages", "interests"):
+        for number, entry in enumerate(review[section], start=1):
+            entry["proposal_id"] = f"{section}-{number}"
 
     counts: dict[str, int] = {}
     for section in ("experiences", "projects", "education", "skills", "languages", "interests"):

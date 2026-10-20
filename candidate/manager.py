@@ -197,8 +197,11 @@ def _check_item_fields(kind: ItemKind, fields: dict, partial: bool) -> tuple[dic
 def _check_dates(kind: ItemKind, item) -> None:
     """La fin ne peut pas être avant le début (y compris avec les dates déjà présentes)."""
     start, end = item.get("start_date"), item.get("end_date")
-    if start and end and str(end) < str(start):
-        raise ItemError(kind.label, ["« end_date » est avant « start_date »."])
+    if start and end:
+        # À la même précision : « 2026 » n'est pas avant « 2026-02 » (on compare alors les années)
+        length = min(len(str(start)), len(str(end)))
+        if str(end)[:length] < str(start)[:length]:
+            raise ItemError(kind.label, ["« end_date » est avant « start_date »."])
 
 
 def _clean_item(kind: ItemKind, fields: dict) -> CommentedMap:
@@ -727,10 +730,11 @@ def update_item(section: str, item_id: str, changes: dict, path: Path | None = N
     return expected
 
 
-def assign_missing_ids(path: Path | None = None) -> dict:
+def assign_missing_ids(path: Path | None = None, positions: list[int] | None = None) -> dict:
     """
     Donne un id aux formations qui n'en ont pas encore (les profils créés avant les id de
     formation), à partir du nom de l'école, pour pouvoir ensuite les modifier par id.
+    `positions` (1, 2...) : seulement ces formations ; par défaut, toutes celles sans id.
     Ne change rien d'autre. Renvoie {position (1, 2...) : id attribué} ({} si rien à faire).
     """
 
@@ -741,6 +745,8 @@ def assign_missing_ids(path: Path | None = None) -> dict:
     assigned = {}
     for number, element in enumerate(data.get(kind.section) or [], start=1):
         if not isinstance(element, dict) or element.get("id"):
+            continue
+        if positions is not None and number not in positions:
             continue
         new_id = _unique_id(_slug(str(element.get(kind.id_from) or "")), existing, fallback=_slug(kind.label))
         existing.add(new_id)
