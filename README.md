@@ -101,6 +101,9 @@ python -m unittest discover tests
 job-application-agent/
 ├── main.py                     # command-line entry point: URL → CV PDF
 ├── requirements.txt
+├── candidate/
+│   ├── profile.py              # reads and validates the candidate profile
+│   └── manager.py              # edits the profile (adding an experience for now)
 ├── browser/
 │   └── read_job.py             # reads a job offer page (Playwright)
 ├── llm/
