@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT / "cv" / "template"
-TEMPLATE_MAIN = "Eliot_Morin_Candidature.tex"
+TEMPLATE_MAIN = "main.tex"
 APPLICATIONS_DIR = ROOT / "cv" / "applications"
 
 

@@ -10,7 +10,7 @@ l'offre (sortie de `main.py` / `llm/analyze_job.py`).
 cv/
 ├── build_cv.py            # écrit les sections générées + compile (appelé par main.py)
 ├── template/              # squelette LaTeX générique (versionné sur git)
-│   ├── Eliot_Morin_Candidature.tex   # préambule, packages, macros, assemblage
+│   ├── main.tex                      # préambule, packages, macros, assemblage
 │   └── sections/
 │       ├── heading.tex
 │       ├── experience.tex
@@ -49,7 +49,7 @@ Seul `cv/template/` (aucune donnée perso) est versionné.
 Classe `article`, mise en page compacte façon "one-page resume" :
 `titlesec`, `fontawesome5`, `tabularx`, `enumitem`, macros perso
 (`\resumeItem`, `\resumeItemPlain`, `\resumeItemListStart/End`...) définies
-dans `template/Eliot_Morin_Candidature.tex`. Pas de photo (CV professionnel international).
+dans `template/main.tex`. Pas de photo (CV professionnel international).
 
 ## Workflow
 
