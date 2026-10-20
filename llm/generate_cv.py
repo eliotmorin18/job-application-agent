@@ -74,7 +74,8 @@ Writing:
 - The "Profile" summary in heading must be written specifically for this offer (2-3 sentences).
 - In heading, only include contact fields that are not empty in the profile.
 - Technical skills: put first what matches the offer; include languages.
-- Interests: 3 to 5 items from the profile, always including Guitar.
+- Interests: 3 to 5 items from the profile, taken in the order of the profile list
+  (the first ones are the candidate's priority).
 - The whole CV must fit on ONE page: keep bullets short (1-2 lines), 1 to 3 bullets per item.
 
 LaTeX:
