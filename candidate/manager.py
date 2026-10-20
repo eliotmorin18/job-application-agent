@@ -128,10 +128,13 @@ def _unique_id(base: str, existing: set[str], fallback: str) -> str:
     return candidate_id
 
 
-def _clean_item(kind: ItemKind, fields: dict) -> CommentedMap:
+def _check_item_fields(kind: ItemKind, fields: dict, partial: bool) -> tuple[dict, list[str]]:
     """
-    Vérifie et nettoie les informations reçues. Les champs facultatifs vides
-    (None, "", [], espaces) sont simplement omis.
+    Vérifie les champs fournis pour un élément (expérience, projet, formation).
+    Renvoie ({champ: valeur à écrire}, [champs vidés]).
+    - partial=False (ajout) : les champs obligatoires doivent être fournis.
+    - partial=True (modification) : seuls les champs fournis sont vérifiés ; un champ fourni
+      vide (None, "", [], espaces) est à vider, sauf s'il est obligatoire.
     """
 
     problems = []
@@ -140,27 +143,31 @@ def _clean_item(kind: ItemKind, fields: dict) -> CommentedMap:
     if unknown:
         problems.append(f"champ(s) inconnu(s) : {', '.join(unknown)}. Champs possibles : {', '.join(kind.fields)}.")
     if "id" in fields:
-        problems.append("l'id est généré automatiquement : ne le fournis pas.")
+        problems.append("l'id est géré automatiquement : il ne peut être ni fourni ni modifié.")
 
-    item = CommentedMap()
+    values, cleared = {}, []
 
     for field in kind.fields:
+        if partial and field not in fields:
+            continue
         value = fields.get(field)
 
         if field in kind.list_fields:
-            if value is None:
-                continue
-            if isinstance(value, str) or not all(isinstance(entry, str) for entry in value):
+            if value is not None and (isinstance(value, str) or not all(isinstance(entry, str) for entry in value)):
                 problems.append(f"« {field} » doit être une liste de textes.")
                 continue
-            entries = [_scalar(entry.strip()) for entry in value if entry.strip()]
+            entries = [_scalar(entry.strip()) for entry in value or [] if entry.strip()]
             if entries:
-                item[field] = CommentedSeq(entries)
+                values[field] = CommentedSeq(entries)
+            else:
+                cleared.append(field)
             continue
 
         if value is None or (isinstance(value, str) and not value.strip()):
             if field in kind.required:
-                problems.append(f"« {field} » est obligatoire.")
+                problems.append(f"« {field} » est obligatoire" + (" et ne peut pas être vidé." if partial else "."))
+            else:
+                cleared.append(field)
             continue
         if not isinstance(value, str):
             problems.append(f"« {field} » doit être un texte.")
@@ -177,14 +184,26 @@ def _clean_item(kind: ItemKind, fields: dict) -> CommentedMap:
             problems.append(f"« github_url » doit commencer par http:// ou https:// (reçu : « {value} »).")
             continue
 
-        item[field] = _scalar(value, quote=field in DATE_FIELDS)
-
-    if "start_date" in item and "end_date" in item and item["end_date"] < item["start_date"]:
-        problems.append("« end_date » est avant « start_date ».")
+        values[field] = _scalar(value, quote=field in DATE_FIELDS)
 
     if problems:
         raise ItemError(kind.label, problems)
 
+    return values, cleared
+
+
+def _check_dates(kind: ItemKind, item) -> None:
+    """La fin ne peut pas être avant le début (y compris avec les dates déjà présentes)."""
+    start, end = item.get("start_date"), item.get("end_date")
+    if start and end and str(end) < str(start):
+        raise ItemError(kind.label, ["« end_date » est avant « start_date »."])
+
+
+def _clean_item(kind: ItemKind, fields: dict) -> CommentedMap:
+    """Nouvel élément : champs vérifiés, champs facultatifs vides simplement omis."""
+    values, _ = _check_item_fields(kind, fields, partial=False)
+    item = CommentedMap((field, values[field]) for field in kind.fields if field in values)
+    _check_dates(kind, item)
     return item
 
 
@@ -635,3 +654,89 @@ def add_preference(category: str, value: str, path: Path | None = None) -> list:
         f"la préférence « {value} »",
     )
     return list(load_profile(path).data["preferences"][category])
+
+
+# ---------- Modification d'un élément existant ----------
+
+def _kind_for_section(section: str) -> ItemKind:
+    for kind in ITEM_KINDS.values():
+        if kind.section == section:
+            return kind
+    sections = ", ".join(kind.section for kind in ITEM_KINDS.values())
+    raise ItemError("élément", [f"section inconnue : « {section} ». Sections possibles : {sections}."])
+
+
+def _plain(item) -> dict:
+    """L'élément tel que le relira le pipeline (textes et listes simples)."""
+    return {str(key): (list(value) if isinstance(value, list) else str(value)) for key, value in item.items()}
+
+
+def update_item(section: str, item_id: str, changes: dict, path: Path | None = None) -> dict:
+    """
+    Modifie seulement les champs fournis d'une expérience, d'un projet ou d'une formation,
+    retrouvé(e) par son id, et renvoie l'élément enregistré.
+
+    - section : "experiences", "projects" ou "education".
+    - changes : {champ: nouvelle valeur}. Une valeur vide (None, "", []) retire un champ
+      facultatif ; un champ obligatoire ne peut pas être vidé.
+    - L'id ne peut pas être modifié (il reste le même si l'entreprise ou le nom change).
+    Les mêmes règles qu'à l'ajout s'appliquent. Lève ProfileError ou ItemError.
+    """
+
+    kind = _kind_for_section(section)
+    if not isinstance(changes, dict) or not changes:
+        raise ItemError(kind.label, ["aucun champ à modifier."])
+    values, cleared = _check_item_fields(kind, changes, partial=True)
+
+    path, current, data = _load_for_edit(path)
+
+    item = next((element for element in data.get(section) or [] if isinstance(element, dict) and element.get("id") == item_id), None)
+    if item is None:
+        known = [element["id"] for element in current.data[section] if isinstance(element, dict) and element.get("id")]
+        message = f"aucun(e) {kind.label} avec l'id « {item_id} ». Ids existants : {', '.join(known) or 'aucun'}."
+        if any(isinstance(element, dict) and not element.get("id") for element in current.data[section]):
+            message += " Certain(e)s n'ont pas d'id : utilise assign_missing_ids() pour leur en donner un."
+        raise ItemError(kind.label, [message])
+
+    for field, value in values.items():
+        item[field] = value          # champ existant : modifié sur place ; nouveau : ajouté à la fin
+    for field in cleared:
+        item.pop(field, None)
+    _check_dates(kind, item)
+
+    expected = _plain(item)
+    _save(
+        path, data,
+        lambda written: any(isinstance(e, dict) and e.get("id") == item_id and e == expected for e in written[section]),
+        f"{kind.label} « {item_id} »",
+    )
+    return expected
+
+
+def assign_missing_ids(path: Path | None = None) -> dict:
+    """
+    Donne un id aux formations qui n'en ont pas encore (les profils créés avant les id de
+    formation), à partir du nom de l'école, pour pouvoir ensuite les modifier par id.
+    Ne change rien d'autre. Renvoie {position (1, 2...) : id attribué} ({} si rien à faire).
+    """
+
+    kind = ITEM_KINDS["education"]
+    path, current, data = _load_for_edit(path)
+
+    existing = _existing_ids(current.data)
+    assigned = {}
+    for number, element in enumerate(data.get(kind.section) or [], start=1):
+        if not isinstance(element, dict) or element.get("id"):
+            continue
+        new_id = _unique_id(_slug(str(element.get(kind.id_from) or "")), existing, fallback=_slug(kind.label))
+        existing.add(new_id)
+        element.insert(0, "id", _scalar(new_id))   # en premier, comme pour les éléments ajoutés
+        assigned[number] = new_id
+
+    if assigned:
+        _save(
+            path, data,
+            lambda written: all(written[kind.section][number - 1].get("id") == new_id for number, new_id in assigned.items()),
+            "les id de formation",
+        )
+    return assigned

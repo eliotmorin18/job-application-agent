@@ -14,7 +14,7 @@ from unittest import mock
 from candidate import manager
 from candidate.manager import (
     ExperienceError, ItemError, add_education, add_experience, add_interest, add_language, add_project, add_skill,
-    add_preference, update_career, update_personal, update_preferences,
+    add_preference, assign_missing_ids, update_career, update_item, update_personal, update_preferences,
 )
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, ProfileError, load_profile
 
@@ -624,6 +624,150 @@ class UpdateSectionsTest(unittest.TestCase):
         profile = load_profile(self.path)
         self.assertEqual(profile.data["personal"]["first_name"], "John")
         self.assertIn("academic_status: student", profile.text)
+
+
+class UpdateItemTest(unittest.TestCase):
+    """Modification d'une expérience, d'un projet ou d'une formation existant(e)."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+        shutil.copy(EXAMPLE_PATH, self.path)
+        self.before_text = self.path.read_text(encoding="utf-8")
+        self.before = load_profile(self.path).data
+
+    def item(self, section, item_id):
+        return next(e for e in load_profile(self.path).data[section] if e.get("id") == item_id)
+
+    def assertNothingElseChanged(self, section, item_id, changed_fields):
+        after = load_profile(self.path).data
+        # Toutes les autres sections : identiques
+        for name in self.before:
+            if name != section:
+                self.assertEqual(after[name], self.before[name], name)
+        # Tous les autres éléments de la section : identiques et dans le même ordre
+        old_others = [e for e in self.before[section] if e.get("id") != item_id]
+        new_others = [e for e in after[section] if e.get("id") != item_id]
+        self.assertEqual(new_others, old_others)
+        self.assertEqual([e.get("id") for e in after[section]], [e.get("id") for e in self.before[section]])
+        # Dans l'élément : les champs non modifiés sont identiques
+        old_item = next(e for e in self.before[section] if e.get("id") == item_id)
+        new_item = next(e for e in after[section] if e.get("id") == item_id)
+        for field in set(old_item) - set(changed_fields):
+            self.assertEqual(new_item.get(field), old_item[field], field)
+
+    def assertRejected(self, expected, *args):
+        with self.assertRaises(ItemError) as context:
+            update_item(*args, self.path)
+        self.assertIn(expected, str(context.exception))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.before_text, "le fichier ne doit pas changer")
+
+    # ---------- les trois types ----------
+
+    def test_update_experience(self):
+        item = update_item("experiences", "example-research-company",
+                           {"title": "Senior CV Intern", "achievements": ["Nouveau résultat"]}, self.path)
+        self.assertEqual(item["title"], "Senior CV Intern")
+        self.assertEqual(item["achievements"], ["Nouveau résultat"])
+        self.assertEqual(item["company"], "Example Research Company")
+        self.assertNothingElseChanged("experiences", "example-research-company", {"title", "achievements"})
+
+    def test_update_project(self):
+        update_item("projects", "face-recognition", {"github_url": "https://github.com/johndoe/face", "end_date": "2026-02"}, self.path)
+        project = self.item("projects", "face-recognition")
+        self.assertEqual(project["github_url"], "https://github.com/johndoe/face")
+        self.assertEqual(project["end_date"], "2026-02")
+        self.assertNothingElseChanged("projects", "face-recognition", {"github_url", "end_date"})
+
+    def test_update_education(self):
+        update_item("education", "example-university", {"degree": "Erasmus Exchange", "details": ["Computer Vision"]}, self.path)
+        education = self.item("education", "example-university")
+        self.assertEqual(education["degree"], "Erasmus Exchange")
+        self.assertEqual(education["details"], ["Computer Vision"])
+        self.assertNothingElseChanged("education", "example-university", {"degree", "details"})
+
+    # ---------- comportement ----------
+
+    def test_only_modified_lines_change_and_comments_are_kept(self):
+        update_item("experiences", "example-software-company", {"location": "Lyon, France"}, self.path)
+        after = self.path.read_text(encoding="utf-8")
+        removed = set(self.before_text.splitlines()) - set(after.splitlines())
+        self.assertEqual(removed, {"    location: Paris, France"} & removed)   # seule la ligne modifiée disparaît
+        self.assertIn("# Résultats obtenus (chiffrés si possible), distincts des missions ci-dessus", after)
+        self.assertIn("    context: >", after)   # les textes sur plusieurs lignes gardent leur forme
+
+    def test_clear_optional_fields(self):
+        item = update_item("projects", "multi-agent-system", {"github_url": "", "achievements": [], "context": None}, self.path)
+        for field in ("github_url", "achievements", "context"):
+            self.assertNotIn(field, item)
+        self.assertNothingElseChanged("projects", "multi-agent-system", {"github_url", "achievements", "context"})
+
+    def test_new_optional_field_can_be_added(self):
+        item = update_item("education", "example-engineering-school", {"location": "Palaiseau, France"}, self.path)
+        self.assertEqual(item["location"], "Palaiseau, France")
+
+    def test_id_is_kept_when_the_name_changes(self):
+        item = update_item("experiences", "example-software-company", {"company": "Acme"}, self.path)
+        self.assertEqual(item["id"], "example-software-company")
+        self.assertEqual(item["company"], "Acme")
+
+    # ---------- refus ----------
+
+    def test_id_cannot_be_changed(self):
+        self.assertRejected("l'id est géré automatiquement", "projects", "face-recognition", {"id": "autre-id"})
+
+    def test_unknown_id(self):
+        self.assertRejected("aucun(e) projet avec l'id « robot ». Ids existants : multi-agent-system, face-recognition",
+                            "projects", "robot", {"name": "Robot"})
+
+    def test_required_fields_cannot_be_emptied(self):
+        self.assertRejected("« company » est obligatoire et ne peut pas être vidé", "experiences", "example-research-company", {"company": ""})
+        self.assertRejected("« name » est obligatoire", "projects", "face-recognition", {"name": None})
+        self.assertRejected("« school » est obligatoire", "education", "example-university", {"school": "  "})
+
+    def test_invalid_changes(self):
+        cases = [
+            ({"start_date": "septembre"}, "AAAA-MM"),
+            ({"end_date": "2025-01"}, "« end_date » est avant « start_date »"),   # comparé au start_date existant
+            ({"priority": "urgent"}, "« priority » doit valoir"),
+            ({"skills": "Python"}, "liste de textes"),
+            ({"salary": "50k"}, "champ(s) inconnu(s) : salary"),
+            ({}, "aucun champ à modifier"),
+        ]
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                self.assertRejected(expected, "experiences", "example-research-company", changes)
+
+    def test_unknown_section(self):
+        self.assertRejected("section inconnue : « skills »", "skills", "programming", {"x": "y"})
+
+    # ---------- anciennes formations sans id ----------
+
+    def test_old_education_without_id(self):
+        self.path.write_text(
+            MINIMAL + "education:\n  - school: Telecom SudParis\n    degree: Ingénieur\n  - id: mit\n    school: MIT\n"
+                      "  - school: Lycée Saint-Louis\n",
+            encoding="utf-8",
+        )
+        # Avant : l'erreur indique la solution
+        with self.assertRaises(ItemError) as context:
+            update_item("education", "telecom-sudparis", {"degree": "Master"}, self.path)
+        self.assertIn("utilise assign_missing_ids()", str(context.exception))
+
+        # assign_missing_ids donne un id aux formations qui n'en ont pas, sans rien changer d'autre
+        self.assertEqual(assign_missing_ids(self.path), {1: "telecom-sudparis", 3: "lycee-saint-louis"})
+        education = load_profile(self.path).data["education"]
+        self.assertEqual([e["id"] for e in education], ["telecom-sudparis", "mit", "lycee-saint-louis"])
+        self.assertEqual(education[0], {"id": "telecom-sudparis", "school": "Telecom SudParis", "degree": "Ingénieur"})
+        self.assertEqual(assign_missing_ids(self.path), {})   # deuxième fois : rien à faire
+
+        # Ensuite, la formation se modifie normalement
+        self.assertEqual(update_item("education", "telecom-sudparis", {"degree": "Master"}, self.path)["degree"], "Master")
+
+    def test_assign_missing_ids_keeps_ids_unique(self):
+        self.path.write_text(MINIMAL + "projects:\n  - id: mit\neducation:\n  - school: MIT\n  - school: MIT\n", encoding="utf-8")
+        self.assertEqual(assign_missing_ids(self.path), {1: "mit-2", 2: "mit-3"})
 
 
 if __name__ == "__main__":
