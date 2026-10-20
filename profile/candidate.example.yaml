@@ -13,6 +13,12 @@ personal:
   linkedin: "https://www.linkedin.com/in/johndoe"
   github: "https://github.com/johndoe"
 
+# Situation actuelle du candidat
+career:
+  academic_status: graduated        # student | graduated
+  employment_status: job_seeking    # employed | job_seeking | internship | freelance | other
+  graduation_date: "2026-06"
+
 education:
   - school: Example Engineering School
     degree: Engineering Degree - Master's level
@@ -67,6 +73,11 @@ experiences:
       - Prepared and annotated computer vision datasets
       - Compared multiple deep-learning approaches
 
+    # Résultats obtenus (chiffrés si possible), distincts des missions ci-dessus
+    achievements:
+      - Improved object-detection mAP from 0.61 to 0.74 on the internal test set
+      - Delivered an annotated dataset of 2,000 images reused by the team
+
     skills:
       - Python
       - PyTorch
@@ -100,6 +111,9 @@ experiences:
       - Implemented tool-calling workflows
       - Automated repetitive software operations
 
+    achievements:
+      - Assistant adopted by the support team for daily operations
+
     skills:
       - Python
       - LLM APIs
@@ -108,6 +122,8 @@ experiences:
 projects:
   - id: multi-agent-system
     name: Autonomous Multi-Agent System
+    start_date: "2025-10"
+    end_date: "2026-01"
     priority: high
 
     tags:
@@ -128,6 +144,9 @@ projects:
       - Implemented the simulation environment
       - Evaluated different multi-agent scenarios
 
+    achievements:
+      - Defenders intercepted every attacker in all simulated 3-versus-5 scenarios
+
     skills:
       - Python
       - NumPy
@@ -138,6 +157,8 @@ projects:
 
   - id: face-recognition
     name: Face Recognition Pipeline
+    start_date: "2025-10"
+    end_date: "2026-01"
     priority: high
 
     tags:
@@ -158,6 +179,9 @@ projects:
       - Compared several visual descriptors
       - Evaluated recognition performance
 
+    achievements:
+      - Reached 92% Rank-1 identification accuracy on the test set
+
     skills:
       - Python
       - OpenCV
@@ -167,6 +191,8 @@ projects:
 
   - id: bioinformatics-project
     name: Bioinformatics Project
+    start_date: "2025-10"
+    end_date: "2025-12"
     priority: medium
 
     tags:
@@ -185,6 +211,9 @@ projects:
       - Analyzed genomic sequences
       - Implemented sequence alignment methods
       - Studied evolutionary relationships
+
+    # Facultatif : laisser vide s'il n'y a pas de résultat notable
+    achievements: []
 
     skills:
       - Python
