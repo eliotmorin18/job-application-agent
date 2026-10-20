@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from candidate import manager
-from candidate.manager import ExperienceError, add_experience
+from candidate.manager import ExperienceError, ItemError, add_education, add_experience, add_project
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, ProfileError, load_profile
 
 
@@ -188,6 +188,114 @@ class AddExperienceTest(unittest.TestCase):
             add_experience({"company": "Acme", "title": "Stagiaire"})
         self.assertEqual(load_profile(path).data["experiences"][0]["id"], "acme")
         self.assertNotEqual(path, CANDIDATE_PATH)
+
+
+class AddProjectTest(unittest.TestCase):
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+
+    def test_adds_project_with_all_fields(self):
+        shutil.copy(EXAMPLE_PATH, self.path)
+        new_id = add_project({
+            "name": "Détecteur de Drones", "start_date": "2026-03", "end_date": "2026-05", "priority": "high",
+            "context": "Projet personnel.", "description": "Détection de drones par vision.",
+            "tags": ["computer_vision"], "responsibilities": ["Annoté 500 images"],
+            "achievements": ["mAP de 0.8"], "skills": ["Python", "YOLO"],
+            "github_url": "https://github.com/janedoe/drones",
+        }, self.path)
+
+        self.assertEqual(new_id, "detecteur-de-drones")
+        project = load_profile(self.path).data["projects"][-1]
+        self.assertEqual(list(project)[:2], ["id", "name"])
+        self.assertEqual(project["github_url"], "https://github.com/janedoe/drones")
+        self.assertEqual(project["start_date"], "2026-03")
+
+    def test_minimal_project_and_empty_optional_fields(self):
+        self.path.write_text(MINIMAL + "projects:\n", encoding="utf-8")
+        add_project({"name": "Robot", "github_url": "", "skills": [], "context": None}, self.path)
+        self.assertEqual(load_profile(self.path).data["projects"], [{"id": "robot", "name": "Robot"}])
+
+    def test_project_id_is_unique_across_the_whole_profile(self):
+        self.path.write_text(MINIMAL + "experiences:\n  - id: robot\neducation:\n  - id: robot-2\n    school: X\n", encoding="utf-8")
+        self.assertEqual(add_project({"name": "Robot"}, self.path), "robot-3")
+
+    def test_invalid_project_is_rejected(self):
+        shutil.copy(EXAMPLE_PATH, self.path)
+        before = self.path.read_text(encoding="utf-8")
+        cases = [
+            ({"context": "Sans nom"}, "« name » est obligatoire"),
+            ({"name": "X", "github_url": "github.com/janedoe/x"}, "« github_url » doit commencer par http"),
+            ({"name": "X", "company": "Acme"}, "champ(s) inconnu(s) : company"),
+        ]
+        for fields, expected in cases:
+            with self.subTest(fields=fields):
+                with self.assertRaises(ItemError) as context:
+                    add_project(fields, self.path)
+                self.assertIn(expected, str(context.exception))
+                self.assertTrue(str(context.exception).startswith("Projet invalide"))
+        self.assertEqual(self.path.read_text(encoding="utf-8"), before)
+
+
+class AddEducationTest(unittest.TestCase):
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        self.path = self.folder / "candidate.yaml"
+
+    def test_adds_education_with_generated_id(self):
+        shutil.copy(EXAMPLE_PATH, self.path)
+        new_id = add_education({
+            "school": "Université Paris-Saclay", "degree": "Master 2", "specialization": "Data Science",
+            "start_date": "2026-09", "end_date": "2027-06", "location": "Orsay, France",
+            "details": ["Deep Learning", "Statistiques"],
+        }, self.path)
+
+        self.assertEqual(new_id, "universite-paris-saclay")
+        education = load_profile(self.path).data["education"]
+        self.assertEqual(len(education), 3)
+        self.assertEqual(education[-1]["details"], ["Deep Learning", "Statistiques"])
+        self.assertEqual(list(education[-1])[:2], ["id", "school"])
+
+    def test_works_with_old_education_entries_without_id(self):
+        # Les profils existants (dont le profil privé) ont des formations sans id
+        self.path.write_text(MINIMAL + "education:\n  - school: Lycee Saint-Louis\n  - school: Telecom\n", encoding="utf-8")
+        new_id = add_education({"school": "Telecom"}, self.path)
+
+        self.assertEqual(new_id, "telecom")
+        education = load_profile(self.path).data["education"]
+        self.assertEqual([e.get("id") for e in education], [None, None, "telecom"])
+
+    def test_same_school_twice_gets_two_ids(self):
+        self.path.write_text(MINIMAL, encoding="utf-8")
+        self.assertEqual(add_education({"school": "MIT", "degree": "Bachelor"}, self.path), "mit")
+        self.assertEqual(add_education({"school": "MIT", "degree": "Master"}, self.path), "mit-2")
+
+    def test_existing_content_is_kept(self):
+        shutil.copy(EXAMPLE_PATH, self.path)
+        before = self.path.read_text(encoding="utf-8")
+        add_education({"school": "MIT"}, self.path)
+        after = self.path.read_text(encoding="utf-8")
+        self.assertTrue(set(before.splitlines()) <= set(after.splitlines()))
+
+        old, new = load_profile(EXAMPLE_PATH).data, load_profile(self.path).data
+        self.assertEqual(new["education"][:-1], old["education"])
+        for section in old:
+            if section != "education":
+                self.assertEqual(new[section], old[section], section)
+
+    def test_invalid_education_is_rejected(self):
+        self.path.write_text(MINIMAL, encoding="utf-8")
+        with self.assertRaises(ItemError) as context:
+            add_education({"degree": "Master", "start_date": "sept 2025"}, self.path)
+        message = str(context.exception)
+        self.assertTrue(message.startswith("Formation invalide"))
+        self.assertIn("« school » est obligatoire", message)
+        self.assertIn("AAAA-MM", message)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), MINIMAL)
 
 
 if __name__ == "__main__":

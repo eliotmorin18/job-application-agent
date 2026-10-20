@@ -100,20 +100,24 @@ def validate_profile(data) -> dict:
             problems.append(f"« {key} » doit contenir des champs (nom: valeur), pas une liste ou un texte.")
             profile[key] = {}
 
-    # Expériences et projets : chaque élément a un id unique (dans tout le profil)
+    # Expériences et projets : chaque élément a un id unique (dans tout le profil).
+    # Formations : l'id est facultatif (les profils existants n'en ont pas), mais unique s'il est présent.
     seen: dict[str, str] = {}
-    for key, label in (("experiences", "expérience"), ("projects", "projet")):
+    for key, label, id_required in (("experiences", "expérience", True), ("projects", "projet", True), ("education", "formation", False)):
         for number, item in enumerate(profile[key], start=1):
             where = f"{label} n°{number}"
             if not isinstance(item, dict):
-                problems.append(f"{where} : doit contenir des champs (id:, ...), pas un simple texte.")
+                if id_required:
+                    problems.append(f"{where} : doit contenir des champs (id:, ...), pas un simple texte.")
                 continue
 
-            name = item.get("company") or item.get("name") or item.get("title")
+            name = item.get("company") or item.get("name") or item.get("school") or item.get("title")
             if _is_text(name):
                 where += f" (« {name} »)"
 
             item_id = item.get("id")
+            if item_id is None and not id_required:
+                continue
             if not _is_text(item_id):
                 problems.append(f"{where} : il manque un « id » (un identifiant court et unique, par ex. « mon-stage-2025 »).")
             elif item_id in seen:

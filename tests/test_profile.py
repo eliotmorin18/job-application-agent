@@ -101,6 +101,12 @@ class InvalidProfilesTest(unittest.TestCase):
     def test_duplicate_id_between_experiences_and_projects(self):
         self.assertProblem(with_profile(experiences=[{"id": "x"}], projects=[{"id": "x"}]), "déjà utilisé par expérience n°1")
 
+    def test_education_ids_are_optional_but_unique(self):
+        validate_profile(with_profile(education=[{"school": "A"}, {"id": "a", "school": "A"}]))
+        self.assertProblem(with_profile(education=[{"id": "x", "school": "A"}], projects=[{"id": "x"}]),
+                           "formation n°1 (« A ») : l'id « x » est déjà utilisé par projet n°1")
+        self.assertProblem(with_profile(education=[{"id": "", "school": "A"}]), "formation n°1 (« A ») : il manque un « id »")
+
     def test_item_that_is_not_a_mapping(self):
         self.assertProblem(with_profile(projects=["Mon projet"]), "projet n°1 : doit contenir des champs")
 

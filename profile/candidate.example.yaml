@@ -20,7 +20,8 @@ career:
   graduation_date: "2026-06"
 
 education:
-  - school: Example Engineering School
+  - id: example-engineering-school
+    school: Example Engineering School
     degree: Engineering Degree - Master's level
     specialization: Computer Science and Artificial Intelligence
     start_date: "2022-09"
@@ -32,7 +33,8 @@ education:
       - Data Science
       - Optimization
 
-  - school: Example University
+  - id: example-university
+    school: Example University
     degree: Academic Exchange
     specialization: Computer Science
     start_date: "2025-09"
