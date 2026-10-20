@@ -1,8 +1,29 @@
+# Secrets : .env et ses variantes, mais un .env.example public reste versionnable
 .env
+.env.*
+!.env.example
+
 *.pdf
 profile/private/
+
+# Python : environnements virtuels, caches, fichiers compilés
 __pycache__/
+*.py[cod]
 .venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Systèmes et éditeurs
+.DS_Store
+.idea/
+*.swp
+*~
+
+# Frontend (futur) : dépendances JavaScript
+node_modules/
 
 # CV LaTeX: seul cv/template/ (générique, sans donnée perso) est versionné.
 # cv/reference/ (dont un CV externe, pas à nous) et cv/applications/ (CVs réels
