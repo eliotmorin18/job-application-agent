@@ -172,11 +172,11 @@ def analyze_job(job: dict, timeout: int = 180) -> dict[str, Any]:
 if __name__ == "__main__":
 
     # Test rapide : le texte de l'offre est lu sur l'entrée standard.
-    # Exemple : python -m llm.analyze_job < offre.txt
+    # Exemple : python -m jobs.analyze_job < offre.txt
     text = sys.stdin.read()
 
     if not text.strip():
-        print("Usage: python -m llm.analyze_job < offre.txt")
+        print("Usage: python -m jobs.analyze_job < offre.txt")
         sys.exit(1)
 
     offer = analyze_job({"url": "", "title": "", "text": text})

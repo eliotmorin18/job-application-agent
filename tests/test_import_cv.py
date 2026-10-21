@@ -18,8 +18,8 @@ import yaml
 from pypdf import PdfReader, PdfWriter
 
 from candidate.import_cv import CVImportError, _fix_accents, extract_pdf_text, import_cv as run_import
-from llm import extract_profile
-from llm.extract_profile import EXTRACTION_SCHEMA, ITEM_FIELDS, PERSONAL_FIELDS, _clean_extraction
+from candidate import extract_profile
+from candidate.extract_profile import EXTRACTION_SCHEMA, ITEM_FIELDS, PERSONAL_FIELDS, _clean_extraction
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH
 
 

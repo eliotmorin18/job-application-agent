@@ -12,10 +12,10 @@ from unittest import mock
 
 import yaml
 
-import main
+from cv import cli
 from candidate.profile import EXAMPLE_PATH, CandidateProfile, ProfileError, load_profile, validate_profile
-from llm import generate_cv as generate_cv_module
-from llm import verify_cv as verify_cv_module
+from cv import generate as generate_cv_module
+from cv import verify as verify_cv_module
 
 
 MINIMAL = {"personal": {"first_name": "Jane", "last_name": "Doe"}}
@@ -178,16 +178,21 @@ def profile_from(text: str) -> CandidateProfile:
 
 class PipelineIntegrationTest(unittest.TestCase):
 
+    def test_former_main_command_delegates_to_cv_cli(self):
+        # « python main.py "<URL>" » reste disponible : il appelle le même pipeline que « python -m cv.cli »
+        import main
+        self.assertIs(main.main, cli.main)
+
     def test_invalid_profile_stops_main_before_browser_and_claude(self):
         bad = Path(tempfile.mkdtemp()) / "candidate.yaml"
         bad.write_text("personal:\n  first_name: Jane\n", encoding="utf-8")
 
         with mock.patch("candidate.profile.CANDIDATE_PATH", bad), \
-             mock.patch.object(main, "read_job") as read_job, \
-             mock.patch.object(main, "analyze_job") as analyze_job, \
+             mock.patch.object(cli, "read_job") as read_job, \
+             mock.patch.object(cli, "analyze_job") as analyze_job, \
              mock.patch("builtins.print"):
             with self.assertRaises(SystemExit) as context:
-                main.main("https://example.com/job")
+                cli.main("https://example.com/job")
 
         self.assertEqual(context.exception.code, 1)
         read_job.assert_not_called()
@@ -221,15 +226,15 @@ class PipelineIntegrationTest(unittest.TestCase):
         profile = load_profile(EXAMPLE_PATH)
         issues = [{"section": "heading", "cv_text": "x", "problem": "y"}]
 
-        with mock.patch.object(main, "load_profile", return_value=profile) as load, \
-             mock.patch.object(main, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
-             mock.patch.object(main, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
-             mock.patch.object(main, "generate_cv", return_value={**FAKE_CV, "candidate_name": ("John", "Doe")}) as generate, \
-             mock.patch.object(main, "verify_cv", side_effect=[issues, []]) as verify, \
-             mock.patch.object(main, "write_cv", return_value=Path("cv/applications/x/x.tex")), \
-             mock.patch.object(main, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
+        with mock.patch.object(cli, "load_profile", return_value=profile) as load, \
+             mock.patch.object(cli, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
+             mock.patch.object(cli, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
+             mock.patch.object(cli, "generate_cv", return_value={**FAKE_CV, "candidate_name": ("John", "Doe")}) as generate, \
+             mock.patch.object(cli, "verify_cv", side_effect=[issues, []]) as verify, \
+             mock.patch.object(cli, "write_cv", return_value=Path("cv/applications/x/x.tex")), \
+             mock.patch.object(cli, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
              mock.patch("builtins.print"):
-            main.main("https://example.com/job")
+            cli.main("https://example.com/job")
 
         load.assert_called_once()
         # 1 rédaction + 1 correction, 2 vérifications : toujours le même objet profil

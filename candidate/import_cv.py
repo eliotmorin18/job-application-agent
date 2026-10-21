@@ -2,7 +2,7 @@
 Import d'un CV PDF : extraction du texte, puis Claude propose un profil structuré (JSON).
 
 Ce module lit le PDF (pypdf), corrige le texte et gère les fichiers. L'extraction des
-informations par Claude est dans llm/extract_profile.py.
+informations par Claude est dans candidate/extract_profile.py.
 
 Le résultat est une PROPOSITION à valider, enregistrée dans profile/private/extracted/ :
 rien n'est écrit dans candidate.yaml. Le PDF fourni est copié dans profile/private/imports/
@@ -23,7 +23,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
-from llm.extract_profile import extract_profile
+from candidate.extract_profile import extract_profile
 
 
 # pypdf écrit ses propres avertissements techniques sur les PDF abîmés : on affiche les nôtres

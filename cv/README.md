@@ -9,7 +9,10 @@ cette page détaille le template et la compilation.
 
 ```
 cv/
-├── build_cv.py            # écrit les sections générées + compile (appelé par main.py)
+├── cli.py                 # point d'entrée : python -m cv.cli "<URL>" (offre → CV PDF)
+├── generate.py            # Claude choisit les éléments du profil et rédige les sections
+├── verify.py              # Claude vérifie le CV contre le profil
+├── build_cv.py            # écrit les sections générées + compile (appelé par cli.py)
 ├── template/              # squelette LaTeX générique (versionné sur git)
 │   ├── main.tex                      # préambule, packages, macros, assemblage
 │   └── sections/
@@ -63,7 +66,7 @@ latexmk -pdf -interaction=nonstopmode -file-line-error -outdir=build <nom>.tex
 ```
 
 puis lit le nombre de pages dans le journal LaTeX (`build/<nom>.log`) :
-`main.py` affiche un avertissement si le CV dépasse une page.
+`cli.py` affiche un avertissement si le CV dépasse une page.
 
 ### Recompiler après une retouche à la main
 

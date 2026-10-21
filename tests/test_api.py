@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from api import main
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH
-from llm import extract_profile
+from candidate import extract_profile
 from test_import_cv import CV_LINES, fake_claude_answer, make_pdf, sha
 
 

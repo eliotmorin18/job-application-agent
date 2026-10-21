@@ -26,14 +26,14 @@ What works today:
 
 ```
 Job offer URL
-  → read the page                    browser/read_job.py   (Playwright)
-  → analyze the offer                llm/analyze_job.py    (Claude)
-  → pick and write the CV content    llm/generate_cv.py    (Claude + your profile + LaTeX template)
-  → fact-check against your profile  llm/verify_cv.py      (Claude, up to 2 rewrites)
+  → read the page                    jobs/read_job.py      (Playwright)
+  → analyze the offer                jobs/analyze_job.py   (Claude)
+  → pick and write the CV content    cv/generate.py        (Claude + your profile + LaTeX template)
+  → fact-check against your profile  cv/verify.py          (Claude, up to 2 rewrites)
   → build and compile the PDF        cv/build_cv.py        (latexmk)
 ```
 
-`main.py` runs the whole pipeline. Claude is called through the Claude Code CLI (`claude -p`), with a JSON schema that forces structured answers.
+`cv/cli.py` runs the whole pipeline. Claude is called through the Claude Code CLI (`llm/claude_cli.py`, `claude -p`), with a JSON schema that forces structured answers.
 
 Your candidate profile is the single source of truth: verifiable facts (skills, tools, results, dates, degrees) and commitments (availability, salary…) must come from it. A few short motivation statements are allowed in the CV summary.
 
@@ -80,8 +80,10 @@ Optionally, put previous CVs written with the same LaTeX template (`.tex` files)
 ### Run
 
 ```bash
-python main.py "<URL of the job offer>"
+python -m cv.cli "<URL of the job offer>"
 ```
+
+The former command `python main.py "<URL>"` still works: it delegates to `cv/cli.py`.
 
 A browser window opens to read the page, then the pipeline takes a few minutes (several Claude calls). The terminal shows each step, the selected experiences and projects, your gaps, any remaining verification issue, and the path of the PDF:
 
@@ -138,7 +140,7 @@ npm run build                           # production build
 
 ```
 job-application-agent/
-├── main.py                     # command-line entry point: URL → CV PDF
+├── main.py                     # former entry point, kept for compatibility (→ cv/cli.py)
 ├── requirements.txt
 ├── api/
 │   └── main.py                 # local FastAPI backend for the web interface
@@ -147,20 +149,22 @@ job-application-agent/
 │   ├── profile.py              # reads and validates the candidate profile
 │   ├── manager.py              # edits the profile (add, update, delete)
 │   ├── import_cv.py            # CV PDF → extraction proposal (JSON)
+│   ├── extract_profile.py      # CV text → profile proposal (Claude, used by import_cv.py)
 │   ├── review_import.py        # compares a proposal with the profile
 │   └── apply_import.py         # applies the user's decisions (all or nothing)
-├── browser/
-│   └── read_job.py             # reads a job offer page (Playwright)
-├── llm/
-│   ├── claude_cli.py           # calls `claude -p` with a JSON schema
-│   ├── analyze_job.py          # job offer → structured JSON
-│   ├── generate_cv.py          # selects profile items and writes the CV sections
-│   └── verify_cv.py            # checks the CV against the profile
+├── jobs/
+│   ├── read_job.py             # reads a job offer page (Playwright)
+│   └── analyze_job.py          # job offer → structured JSON (Claude)
 ├── cv/
+│   ├── cli.py                  # command-line entry point: URL → CV PDF (python -m cv.cli)
+│   ├── generate.py             # selects profile items and writes the CV sections (Claude)
+│   ├── verify.py               # checks the CV against the profile (Claude)
 │   ├── build_cv.py             # writes the LaTeX files and compiles the PDF
 │   ├── template/               # LaTeX template (main.tex + sections/)
 │   ├── reference/              # optional style references (local, ignored by Git)
 │   └── applications/           # generated CVs (local, ignored by Git)
+├── llm/                        # shared tools to call Claude
+│   └── claude_cli.py           # calls `claude -p` with a JSON schema
 ├── profile/
 │   ├── candidate.example.yaml  # profile template
 │   └── private/                # your real profile (local, ignored by Git)
