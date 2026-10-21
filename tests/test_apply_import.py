@@ -380,6 +380,228 @@ class ApplyImportTest(unittest.TestCase):
 
     # ---------- conservation et compte rendu ----------
 
+    # ---------- corrections manuelles (overrides) ----------
+
+    def test_corrected_values_are_saved(self):
+        report = self.apply({"experiences-2": {
+            "action": "add",
+            "fields": ["company", "title", "start_date", "end_date", "responsibilities", "skills"],
+            "overrides": {"company": "  Dassault Systèmes SE ", "start_date": "2026-11", "end_date": "2027-04",
+                          "responsibilities": ["Agent IA pour la conception", " ", "Évaluation des modèles"],
+                          "skills": ["Python", "LLM"]},
+        }})
+        self.assertEqual(report["added"][0]["id"], "dassault-systemes-se")
+        self.assertEqual(report["added"][0]["corrected"],
+                         ["company", "end_date", "responsibilities", "skills", "start_date"])
+        self.assertEqual(self.item("experiences", "dassault-systemes-se"), {
+            "id": "dassault-systemes-se", "company": "Dassault Systèmes SE", "title": "Stagiaire IA",
+            "start_date": "2026-11", "end_date": "2027-04",
+            "responsibilities": ["Agent IA pour la conception", "Évaluation des modèles"], "skills": ["Python", "LLM"],
+        })
+
+    def test_corrected_update_keeps_list_merging(self):
+        self.apply({"experiences-1": {
+            "action": "update", "target_id": "cnrs-aubay", "fields": ["responsibilities", "end_date", "achievements"],
+            "overrides": {"responsibilities": ["État de l'art", "Prototypes avec SAM et MM-Grounding-DINO"],
+                          "end_date": "2026-08", "achievements": ["Prototype présenté à la fondation"]},
+        }})
+        experience = self.item("experiences", "cnrs-aubay")
+        self.assertEqual(experience["responsibilities"], ["État de l'art", "Prototypes avec SAM et MM-Grounding-DINO"])
+        self.assertEqual(experience["end_date"], "2026-08")
+        self.assertEqual(experience["achievements"], ["Prototype présenté à la fondation"])
+        self.assertEqual(experience["start_date"], "2026-02")      # non repris : inchangé
+
+    def test_corrected_personal_skill_language_interest(self):
+        report = self.apply({
+            "personal": {"action": "update", "fields": ["phone", "linkedin"],
+                         "overrides": {"linkedin": "https://www.linkedin.com/in/jane-doe"}},
+            "skills-2": {"action": "add", "overrides": {"skill": "Rust (notions)"}},
+            "languages-2": {"action": "add", "level": "B1", "overrides": {"language": "Spanish"}},
+            "interests-2": {"action": "add", "overrides": {"interest": "Échecs"}},
+            "experiences-2": {"action": "add", "fields": ["company", "title"], "overrides": {"title": "AI Intern"}},
+        })
+        data = self.data()
+        self.assertEqual(data["personal"]["linkedin"], "https://www.linkedin.com/in/jane-doe")
+        self.assertEqual(data["personal"]["phone"], "+33 6 11 22 33 44")
+        self.assertEqual(data["skills"]["programming"], ["Python", "Rust (notions)"])
+        self.assertEqual(data["languages"][-1], {"language": "Spanish", "level": "B1"})
+        self.assertEqual(data["interests"], ["Tennis", "Échecs"])
+        self.assertEqual(self.item("experiences", "dassault-systemes")["title"], "AI Intern")
+        corrected = {record["proposal_id"]: record.get("corrected") for record in report["added"] + report["updated"]}
+        self.assertEqual(corrected["personal"], ["linkedin"])
+        self.assertEqual(corrected["skills-2"], ["skill"])
+
+    def test_invalid_corrections_are_refused(self):
+        cases = [
+            ({"experiences-2": {"action": "add", "fields": ["company", "title", "start_date"],
+                                "overrides": {"start_date": "mars 2024"}}}, "AAAA"),
+            ({"experiences-2": {"action": "add", "fields": ["company", "title", "start_date", "end_date"],
+                                "overrides": {"end_date": "2026-05"}}}, "« end_date » est avant « start_date »"),
+            ({"experiences-1": {"action": "update", "target_id": "cnrs-aubay", "fields": ["end_date"],
+                                "overrides": {"end_date": "2025"}}}, "« end_date » est avant « start_date »"),
+            ({"experiences-2": {"action": "add", "fields": ["company", "title"], "overrides": {"company": "  "}}},
+             "vide"),
+            ({"experiences-2": {"action": "add", "fields": ["company", "title"], "overrides": {"location": "Paris"}}},
+             "non repris"),
+            ({"projects-2": {"action": "add", "fields": ["name", "github_url"],
+                             "overrides": {"github_url": "github.com/jane"}}}, "http"),
+            ({"projects-2": {"action": "add", "overrides": {"tags": "ia"}}}, "liste de textes"),
+            ({"personal": {"action": "update", "fields": ["phone"], "overrides": {"email": "jane@x.fr"}}}, "non repris"),
+            ({"personal": {"action": "update", "fields": ["email"], "overrides": {"email": "jane at x"}}}, "e-mail"),
+            ({"skills-2": {"action": "add", "overrides": {"category": "tools"}}}, "ne peut pas être corrigé"),
+            ({"interests-2": {"action": "add", "overrides": "Échecs"}}, "overrides"),
+            ({"languages-1": {"action": "update", "overrides": {"language": "Français"}}}, "option(s) inconnue(s)"),
+        ]
+        for decisions, expected in cases:
+            with self.subTest(decisions=decisions):
+                self.assertRefused(decisions, expected)
+
+    def test_one_invalid_correction_saves_nothing(self):
+        problems = self.assertRefused({
+            "experiences-2": {"action": "add", "fields": ["company", "title"], "overrides": {"company": "Dassault"}},
+            "personal": {"action": "update", "fields": ["phone"], "overrides": {"phone": "+33 7 00 00 00 00"}},
+            "interests-2": {"action": "add", "overrides": {"interest": "Échecs"}},
+            "projects-2": {"action": "add", "fields": ["name", "start_date"], "overrides": {"start_date": "bientôt"}},
+        }, "projects-2").problems
+        self.assertEqual(len(problems), 1)
+
+    def test_correction_matching_an_existing_element_needs_confirmation(self):
+        # « Drone Detector » est nouveau, mais corrigé en « Cassiopée » il existe déjà dans le profil
+        decision = {"action": "add", "fields": ["name"], "overrides": {"name": "cassiopée"}}
+        self.assertRefused({"projects-2": decision}, "après correction")
+        self.apply({"projects-2": {**decision, "allow_duplicate": True}})
+        self.assertEqual([p["name"] for p in self.data()["projects"]], ["Cassiopée", "cassiopée"])
+
+    def test_corrected_names_keep_the_exact_duplicate_protections(self):
+        self.assertRefused({"skills-2": {"action": "add", "allow_duplicate": True, "overrides": {"skill": "PYTHON"}}},
+                           "ne peut pas y figurer deux fois")
+        self.assertRefused({"languages-2": {"action": "add", "level": "B1", "overrides": {"language": "french"}}},
+                           "déjà dans le profil")
+        self.assertRefused({"interests-2": {"action": "add", "overrides": {"interest": "tennis"}}},
+                           "déjà dans les centres d'intérêt")
+
+    # ---------- actions désactivées dans l'interface : toujours refusées, même confirmées ----------
+    # (frontend/src/features/import/decisions.ts, unavailableActions)
+
+    def test_interface_blocked_actions_are_refused_even_with_allow_duplicate(self):
+        cases = {
+            "compétence déjà dans la catégorie (valeur corrigée)": (
+                {"skills-2": {"action": "add", "allow_duplicate": True, "overrides": {"skill": " PYTHON"}}},
+                "ne peut pas y figurer deux fois"),
+            "langue du même nom (valeur corrigée)": (
+                {"languages-2": {"action": "add", "level": "B1", "allow_duplicate": True,
+                                 "overrides": {"language": "french"}}},
+                "déjà dans le profil"),
+            "centre d'intérêt identique (valeur corrigée)": (
+                {"interests-2": {"action": "add", "allow_duplicate": True, "overrides": {"interest": "TENNIS"}}},
+                "déjà dans les centres d'intérêt"),
+            "même compétence deux fois dans l'import": (
+                {"skills-2": {"action": "add"},
+                 "skills-3": {"action": "add", "category": "programming", "allow_duplicate": True,
+                              "overrides": {"skill": "rust"}}},
+                "par une autre décision"),
+            "même langue deux fois dans l'import": (
+                {"languages-1": {"action": "add", "allow_duplicate": True, "overrides": {"language": "espagnol"}},
+                 "languages-2": {"action": "add", "level": "A2", "allow_duplicate": True}},
+                "par une autre décision"),
+            "même centre d'intérêt deux fois dans l'import": (
+                {"interests-1": {"action": "add", "allow_duplicate": True, "overrides": {"interest": "chess"}},
+                 "interests-2": {"action": "add", "allow_duplicate": True}},
+                "par une autre décision"),
+        }
+        for name, (decisions, expected) in cases.items():
+            with self.subTest(name):
+                self.assertRefused(decisions, expected)
+
+    def test_rename_onto_another_existing_interest_is_refused(self):
+        self.profile.write_text(PROFILE.replace("interests:\n  - Tennis\n", "interests:\n  - Tennis\n  - Chess\n"),
+                                encoding="utf-8")
+        self.assertRefused({"interests-1": {"action": "update", "target": "Tennis", "overrides": {"interest": "chess"}}},
+                           "déjà dans les centres d'intérêt")
+        # Changer seulement la casse de la cible reste permis
+        self.apply({"interests-1": {"action": "update", "target": "Tennis", "overrides": {"interest": "TENNIS"}}})
+        self.assertEqual(self.data()["interests"], ["TENNIS", "Chess"])
+
+    def test_interface_allowed_actions_are_accepted_once_confirmed(self):
+        report = self.apply({
+            "skills-1": {"action": "add", "category": "cloud", "create_category": True,
+                         "allow_duplicate": True},                     # python : aussi dans une autre catégorie
+            "languages-1": {"action": "add", "allow_duplicate": True},  # Français ≈ French
+            "interests-2": {"action": "add", "overrides": {"interest": "Échecs"}},
+            "projects-2": {"action": "add", "fields": ["name"], "allow_duplicate": True,
+                           "overrides": {"name": "Cassiopée"}},         # nom corrigé = projet existant, confirmé
+        })
+        self.assertEqual(len(report["added"]), 4)
+        data = self.data()
+        self.assertEqual(data["skills"]["cloud"], ["python"])
+        self.assertEqual(data["languages"][-1]["language"], "Français")
+
+    # ---------- C, C++ et C# : trois compétences distinctes ----------
+
+    def use(self, skills, profile_skills="  programming:\n    - Python\n    - C\n"):
+        """Profil et extraction réduits aux compétences."""
+        self.profile.write_text(PROFILE.replace("  programming:\n    - Python\n", profile_skills), encoding="utf-8")
+        extraction = {**EXTRACTION, "profile": {"skills": {"programming": skills}}}
+        self.json.write_text(json.dumps(extraction, ensure_ascii=False), encoding="utf-8")
+
+    def test_c_cpp_and_csharp_are_distinct_skills(self):
+        self.use(["C++", "C#", "c++ ", "PYTHON", "C"])
+        review = review_import(self.json, self.profile)
+        self.assertEqual([(s["skill"], s["status"]) for s in review["skills"]], [
+            ("C++", "new"), ("C#", "new"), ("c++ ", "new"), ("PYTHON", "duplicate"), ("C", "duplicate")])
+
+        self.apply({"skills-1": {"action": "add"}, "skills-2": {"action": "add"}})
+        self.assertEqual(self.data()["skills"]["programming"], ["Python", "C", "C++", "C#"])
+
+    def test_a_second_cpp_is_refused(self):
+        self.use(["C++", "c++ "])
+        self.assertRefused({"skills-1": {"action": "add"}, "skills-2": {"action": "add", "allow_duplicate": True}},
+                           "par une autre décision")                      # deux fois dans le même import
+        self.apply({"skills-1": {"action": "add"}})
+        self.use(["c++"], profile_skills="  programming:\n    - Python\n    - C\n    - C++\n")
+        self.assertEqual(review_import(self.json, self.profile)["skills"][0]["status"], "duplicate")
+        self.assertRefused({"skills-1": {"action": "add", "allow_duplicate": True}}, "ne peut pas y figurer deux fois")
+
+    def test_case_and_spaces_are_still_ignored_for_skills(self):
+        self.use(["PYTHON", "  python  "])
+        self.assertRefused({"skills-1": {"action": "add", "allow_duplicate": True}}, "ne peut pas y figurer deux fois")
+        self.assertRefused({"skills-2": {"action": "add", "overrides": {"skill": " Python"}}},
+                           "ne peut pas y figurer deux fois")
+
+    def test_skill_lists_of_an_experience_keep_c_cpp_and_csharp(self):
+        extraction = {**EXTRACTION, "profile": {"experiences": [
+            {"company": "CNRS Foundation - via Aubay", "title": "Research Intern", "start_date": "2026-02",
+             "skills": ["c", "C++", "C#"]}]}}
+        self.json.write_text(json.dumps(extraction, ensure_ascii=False), encoding="utf-8")
+        self.profile.write_text(PROFILE.replace("    context: Projet Science4Reefs.\n",
+                                                "    context: Projet Science4Reefs.\n    skills:\n      - C\n"),
+                                encoding="utf-8")
+        match = review_import(self.json, self.profile)["experiences"][0]["matches"][0]
+        self.assertEqual(match["differences"]["skills"]["new_values"], ["C++", "C#"])
+        self.apply({"experiences-1": {"action": "update", "target_id": "cnrs-aubay", "fields": ["skills"]}})
+        self.assertEqual(self.item("experiences", "cnrs-aubay")["skills"], ["C", "C++", "C#"])
+
+    def test_normalization_shared_with_the_frontend(self):
+        # Même table que frontend/src/test/importDecisions.test.ts (PYTHON_NORM)
+        from candidate.review_import import _norm
+        expected = {
+            "Python": "python", "  PyTorch  ": "pytorch", "Télécom SudParis": "telecom sudparis", "ÉCHECS": "echecs",
+            "C++": "c", "C#": "c", "Node.js": "node js", "scikit-learn": "scikit learn", "Scikit Learn": "scikit learn",
+            "CI/CD": "ci cd", "Course à pied": "course a pied", "Français": "francais",
+            "Machine   Learning": "machine learning", "machine_learning": "machine learning", "Œuvre": "uvre",
+            "naïve": "naive", "Straße": "strae", "L'Oréal": "l oreal", "": "", "1er Prix": "1er prix",
+        }
+        self.assertEqual({text: _norm(text) for text in expected}, expected)
+
+        # Noms de compétences : même table que PYTHON_SKILL_NORM dans le test du frontend
+        from candidate.review_import import _skill_norm
+        skills = {
+            "C": "c", "C++": "c++", "C#": "c#", "c++ ": "c++", "  PYTHON ": "python", "Python": "python",
+            "F#": "f#", "Node.js": "node js", "scikit-learn": "scikit learn", "Scikit Learn": "scikit learn",
+            ".NET": "net", "CI/CD": "ci cd", "Télécom": "telecom", "Machine   Learning": "machine learning", "": "",
+        }
+        self.assertEqual({text: _skill_norm(text) for text in skills}, skills)
+
     def test_comments_and_other_sections_are_kept(self):
         self.apply({"experiences-2": {"action": "add"},
                     "experiences-1": {"action": "update", "target_id": "cnrs-aubay", "fields": ["skills"]}})

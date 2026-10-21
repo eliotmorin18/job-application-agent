@@ -33,6 +33,14 @@ Structure des décisions (dict, clé = proposal_id de review_import) :
 
       # Coordonnées : seulement les champs cités
       "personal":     {"action": "update", "fields": ["phone", "linkedin"]},
+
+      # Corrections manuelles (facultatif) : la valeur corrigée remplace la valeur extraite
+      "experiences-4": {"action": "add", "fields": ["company", "title", "responsibilities"],
+                        "overrides": {"company": "Aubay", "responsibilities": ["Mission corrigée"]}},
+      "personal":      {"action": "update", "fields": ["email"], "overrides": {"email": "jane@example.com"}},
+      "skills-2":      {"action": "add", "overrides": {"skill": "PyTorch"}},
+      "languages-3":   {"action": "add", "overrides": {"language": "Allemand"}},
+      "interests-1":   {"action": "add", "overrides": {"interest": "Échecs"}},
     }
 
 Règles :
@@ -42,6 +50,11 @@ Règles :
 - update d'un texte : remplacé, sauf si la nouvelle valeur est moins précise (« 2026 » au
   lieu de « 2026-02 », « Paris » au lieu de « Paris, France ») sans allow_less_precise.
 - Les id existants sont conservés. Une ancienne formation sans id reçoit un id, et elle seule.
+- overrides : chaque champ corrigé doit aussi être repris (dans « fields » quand il est donné) ; une
+  valeur vide est refusée (décocher le champ). Les corrections sont vérifiées avec les règles de
+  manager.py (dates, URL, e-mail...) puis passent par toutes les vérifications ci-dessus. Le statut de
+  doublon de la revue a été calculé sur la valeur extraite : un nom corrigé qui correspond exactement
+  à un élément du profil est refusé sans allow_duplicate.
 """
 
 import os
@@ -52,9 +65,10 @@ from pathlib import Path
 
 from candidate import manager
 from candidate import profile as profile_module
-from candidate.manager import ITEM_KINDS, DATE_PATTERN, ItemError, _category_key, _slug
+from candidate.manager import (ITEM_KINDS, DATE_PATTERN, SECTION_SPECS, ItemError, _category_key, _check_dates,
+                               _check_item_fields, _clean_section_fields, _slug)
 from candidate.profile import ProfileError, load_profile
-from candidate.review_import import review_import
+from candidate.review_import import _skill_norm, review_import
 
 
 ACTIONS = ("skip", "add", "update")
@@ -87,11 +101,12 @@ def _less_precise(new, current) -> bool:
     return bool(new_words) and new_words < current_words
 
 
-def _merge_list(current, extracted) -> list:
+def _merge_list(current, extracted, same=None) -> list:
     """Valeurs existantes conservées, nouvelles valeurs ajoutées à la suite (sans doublon)."""
+    same = same or _norm
     merged = list(current or [])
     for value in extracted:
-        if not any(_norm(value) == _norm(known) for known in merged):
+        if not any(same(value) == same(known) for known in merged):
             merged.append(value)
     return merged
 
@@ -100,14 +115,14 @@ def _merge_list(current, extracted) -> list:
 
 # Options permises, selon le type de proposition et l'action
 OPTIONS = {
-    ("item", "add"): {"fields", "allow_duplicate"},
-    ("item", "update"): {"target_id", "target_position", "fields", "clear", "allow_less_precise"},
-    ("skills", "add"): {"category", "create_category", "allow_duplicate"},
-    ("languages", "add"): {"level", "allow_duplicate"},
+    ("item", "add"): {"fields", "allow_duplicate", "overrides"},
+    ("item", "update"): {"target_id", "target_position", "fields", "clear", "allow_less_precise", "overrides"},
+    ("skills", "add"): {"category", "create_category", "allow_duplicate", "overrides"},
+    ("languages", "add"): {"level", "allow_duplicate", "overrides"},
     ("languages", "update"): {"level"},
-    ("interests", "add"): {"allow_duplicate"},
-    ("interests", "update"): {"target"},
-    ("personal", "update"): {"fields", "allow_less_precise"},
+    ("interests", "add"): {"allow_duplicate", "overrides"},
+    ("interests", "update"): {"target", "overrides"},
+    ("personal", "update"): {"fields", "allow_less_precise", "overrides"},
 }
 BOOLEAN_OPTIONS = {"allow_duplicate", "allow_less_precise", "create_category"}
 TEXT_OPTIONS = {"target_id", "category", "level", "target"}
@@ -136,10 +151,83 @@ def _check_shape(where: str, group: str, decision: dict, problems: list) -> bool
             errors.append(f"« {key} » doit être une liste de noms de champs, par ex. [\"context\"]")
         elif key == "target_position" and (isinstance(value, bool) or not isinstance(value, int)):
             errors.append("« target_position » doit être un numéro (1, 2...)")
+        elif key == "overrides" and (not isinstance(value, dict) or not all(
+                isinstance(v, str) or (isinstance(v, list) and all(isinstance(x, str) for x in v))
+                for v in value.values())):
+            errors.append("« overrides » doit être un objet {champ: texte ou liste de textes}")
 
     for error in errors:
         problems.append(f"{where} : {error}.")
     return not errors
+
+
+# ---------- Corrections manuelles (overrides) ----------
+
+# Ce que l'on peut corriger pour une compétence, une langue ou un centre d'intérêt
+OVERRIDE_KEYS = {"skills": {"skill"}, "languages": {"language"}, "interests": {"interest"}}
+
+
+def _clean_overrides(where: str, overrides: dict, allowed, problems: list):
+    """Valeurs corrigées sans espaces superflus ; None (et un problème) si l'une est vide ou inconnue."""
+    cleaned, ok = {}, True
+    for field, value in overrides.items():
+        if allowed is not None and field not in allowed:
+            problems.append(f"{where} : « {field} » ne peut pas être corrigé ici (possible : {', '.join(sorted(allowed))}).")
+            ok = False
+            continue
+        value = [v.strip() for v in value if v.strip()] if isinstance(value, list) else value.strip()
+        if not value:
+            problems.append(f"{where} : la correction de « {field} » est vide ; décoche plutôt ce champ.")
+            ok = False
+        cleaned[field] = value
+    return cleaned if ok else None
+
+
+def _with_overrides(where: str, section: str, entry: dict, decision: dict, problems: list):
+    """
+    La proposition avec les valeurs corrigées par l'utilisateur à la place des valeurs extraites,
+    après vérification avec les règles de manager.py. None (et des problèmes) si une correction est refusée.
+    """
+    overrides = decision.get("overrides")
+    if not overrides:
+        return entry
+
+    if section not in ITEM_SECTIONS:
+        cleaned = _clean_overrides(where, overrides, OVERRIDE_KEYS[section], problems)
+        return None if cleaned is None else {**entry, **cleaned, "corrected": sorted(cleaned)}
+
+    kind = ITEM_SECTIONS[section]
+    fields = decision.get("fields")
+    not_taken = sorted(set(overrides) - set(fields)) if fields is not None else []
+    if not_taken:
+        problems.append(f"{where} : champ(s) corrigé(s) mais non repris : {', '.join(not_taken)} (ajoute-les à « fields »).")
+        return None
+    cleaned = _clean_overrides(where, overrides, None, problems)
+    if cleaned is None:
+        return None
+    try:
+        _check_item_fields(kind, cleaned, partial=True)          # mêmes règles qu'à l'enregistrement
+    except ItemError as error:
+        problems.extend(f"{where} : correction refusée — {problem}" for problem in error.problems)
+        return None
+    return {**entry, "data": {**entry["data"], **cleaned}, "corrected": sorted(cleaned)}
+
+
+def _corrected_name_exists(where, kind, entry, decision, profile, problems) -> bool:
+    """
+    Le statut de doublon vient de la valeur EXTRAITE. Si la correction donne exactement le nom d'un
+    élément du profil (« Aubey » corrigé en « Aubay »), l'ajout demande la même confirmation qu'un doublon.
+    """
+    name_field = kind.id_from
+    if name_field not in entry.get("corrected", []) or decision.get("allow_duplicate"):
+        return False
+    name = entry["data"][name_field]
+    same = [item.get("id") or item.get(name_field) for item in profile[kind.section]
+            if isinstance(item, dict) and _norm(item.get(name_field)) == _norm(name)]
+    if same:
+        problems.append(f"{where} : après correction, « {name} » correspond à un(e) {kind.label} déjà présent(e) "
+                        f"({', '.join(map(str, same))}). Utilise « update », ou ajoute \"allow_duplicate\": true.")
+    return bool(same)
 
 
 # ---------- Préparation : tout est vérifié avant de modifier quoi que ce soit ----------
@@ -166,6 +254,7 @@ def _plan(review: dict, decisions: dict, profile: dict):
         problems.append(f"proposition(s) inconnue(s) : {', '.join(unknown)}.")
 
     batch: set = set()   # valeurs ajoutées par ce lot de décisions (deux fois la même : refusé)
+    corrected: dict = {}  # proposal_id -> champs corrigés par l'utilisateur
 
     for proposal_id, (section, entry) in proposals.items():
         decision = decisions.get(proposal_id)
@@ -183,6 +272,11 @@ def _plan(review: dict, decisions: dict, profile: dict):
             continue
 
         where = f"{proposal_id}"
+        entry = _with_overrides(where, section, entry, decision, problems)
+        if entry is None:
+            continue
+        if entry.get("corrected"):
+            corrected[proposal_id] = entry["corrected"]
         if section in ITEM_SECTIONS:
             _plan_item(where, ITEM_SECTIONS[section], entry, decision, profile, problems, operations, report)
         elif section == "skills":
@@ -194,6 +288,10 @@ def _plan(review: dict, decisions: dict, profile: dict):
 
     if "personal" in decisions:
         _plan_personal(review, decisions["personal"], problems, operations, report)
+
+    for record in report["added"] + report["updated"]:
+        if record["proposal_id"] in corrected:
+            record["corrected"] = corrected[record["proposal_id"]]
 
     return operations, problems, report
 
@@ -220,7 +318,14 @@ def _plan_item(where, kind, entry, decision, profile, problems, operations, repo
     if action == "add":
         if not _check_duplicate(where, entry, decision, problems):
             return
+        if _corrected_name_exists(where, kind, entry, decision, profile, problems):
+            return
         chosen = {field: data[field] for field in (fields or data)}
+        try:
+            _check_dates(kind, chosen)
+        except ItemError as error:
+            problems.extend(f"{where} : {problem}" for problem in error.problems)
+            return
         record = {"proposal_id": where, "section": kind.section, "id": None}
 
         def add(path, chosen=chosen, record=record):
@@ -263,7 +368,8 @@ def _plan_item(where, kind, entry, decision, profile, problems, operations, repo
     changes = {}
     for field in fields:
         if field in kind.list_fields:
-            changes[field] = _merge_list(target.get(field), data[field])
+            changes[field] = _merge_list(target.get(field), data[field],
+                                         _skill_norm if field == "skills" else _norm)
         else:
             if _less_precise(data[field], target.get(field)) and not decision.get("allow_less_precise"):
                 problems.append(f"{where} : « {data[field]} » est moins précis que « {target.get(field)} » ({field}). "
@@ -271,6 +377,11 @@ def _plan_item(where, kind, entry, decision, profile, problems, operations, repo
                 return
             changes[field] = data[field]
     changes.update({field: None for field in clear})
+    try:   # dates de l'élément après mise à jour (y compris corrigées)
+        _check_dates(kind, {**target, **{f: v for f, v in changes.items() if v is not None}})
+    except ItemError as error:
+        problems.extend(f"{where} : {problem}" for problem in error.problems)
+        return
 
     record = {"proposal_id": where, "section": kind.section, "id": target_id,
               "fields": list(fields), "cleared": list(clear)}
@@ -295,17 +406,18 @@ def _plan_skill(where, entry, decision, profile, problems, operations, report, b
 
     skill = entry["skill"]
     # Comme manager.add_skill : jamais deux fois la même compétence dans une catégorie (allow_duplicate n'y change rien)
-    if target is not None and any(_norm(skill) == _norm(known) for known in profile["skills"][target] or []):
+    if target is not None and any(_skill_norm(skill) == _skill_norm(known) for known in profile["skills"][target] or []):
         problems.append(f"{where} : « {skill} » est déjà dans la catégorie « {target} » ; "
                         "une compétence ne peut pas y figurer deux fois.")
         return
     # Ailleurs dans le profil : permis par manager, mais seulement si l'utilisateur le confirme
-    elsewhere = [name for name, values in profile["skills"].items() if any(_norm(skill) == _norm(v) for v in values or [])]
+    elsewhere = [name for name, values in profile["skills"].items()
+                 if any(_skill_norm(skill) == _skill_norm(v) for v in values or [])]
     if elsewhere and not decision.get("allow_duplicate"):
         problems.append(f"{where} : « {skill} » est déjà dans la catégorie « {elsewhere[0]} ». "
                         "Pour l'ajouter aussi dans « " + category + " », ajoute \"allow_duplicate\": true.")
         return
-    key = ("skills", _category_key(category), _norm(skill))
+    key = ("skills", _category_key(category), _skill_norm(skill))
     if key in batch:
         problems.append(f"{where} : « {skill} » est déjà ajoutée dans « {category} » par une autre décision.")
         return
@@ -403,6 +515,21 @@ def _plan_personal(review, decision, problems, operations, report):
     if unknown:
         problems.append(f"personal : champ(s) absent(s) de l'extraction : {', '.join(unknown)}.")
         return
+    overrides = decision.get("overrides") or {}
+    not_taken = sorted(set(overrides) - set(fields))
+    if not_taken:
+        problems.append(f"personal : champ(s) corrigé(s) mais non repris : {', '.join(not_taken)} (ajoute-les à « fields »).")
+        return
+    if overrides:
+        cleaned = _clean_overrides("personal", overrides, None, problems)
+        if cleaned is None:
+            return
+        try:
+            _clean_section_fields(SECTION_SPECS["personal"], cleaned)     # mêmes règles qu'à l'enregistrement
+        except ItemError as error:
+            problems.extend(f"personal : correction refusée — {problem}" for problem in error.problems)
+            return
+        extracted = {**extracted, **{f: {**extracted[f], "extracted": v} for f, v in cleaned.items()}}
     for field in fields:
         entry = extracted[field]
         if _less_precise(entry["extracted"], entry["current"]) and not decision.get("allow_less_precise"):
@@ -410,7 +537,10 @@ def _plan_personal(review, decision, problems, operations, report):
             return
     changes = {field: extracted[field]["extracted"] for field in fields}
     operations.append(lambda path, changes=changes: manager.update_personal(changes, path))
-    report["updated"].append({"proposal_id": "personal", "section": "personal", "fields": list(fields)})
+    record = {"proposal_id": "personal", "section": "personal", "fields": list(fields)}
+    if overrides:
+        record["corrected"] = sorted(overrides)
+    report["updated"].append(record)
 
 
 # ---------- Application : tout ou rien ----------

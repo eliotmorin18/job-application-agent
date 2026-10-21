@@ -6,7 +6,7 @@
 
 You describe your background once in a local candidate profile. For each offer, the tool reads the job posting, picks the experiences and projects that matter for it, writes a CV adapted to the offer, checks that everything in it comes from your profile, and exports it to PDF with LaTeX.
 
-The goal is a CV that fits the offer **and stays faithful to what you have actually done**. It runs locally from the terminal: no account, no server, no web interface.
+The goal is a CV that fits the offer **and stays faithful to what you have actually done**. It runs locally: the CV pipeline from the terminal, and the candidate profile from a local web interface (React + FastAPI). No account, no database, no hosted server.
 
 ## Features
 
@@ -19,6 +19,8 @@ What works today:
 - **Fact-check the CV against your profile**: a second Claude call flags anything not supported by your profile, and the CV is rewritten (up to 2 times) until it is clean. Remaining issues are printed in the terminal.
 - **Export to PDF** with LaTeX, and warn if the CV is longer than one page.
 - **List the requirements of the offer that your profile does not cover**, so you know your gaps.
+- **Manage the candidate profile from a local web interface**: view, add, edit and delete experiences, education, projects, skills, languages, interests, contact details, career status and preferences.
+- **Import an existing CV (PDF)**: Claude extracts a proposal, which is compared with the profile (duplicates, uncertain fields); you choose what to add, update or skip, and can correct any extracted value, before anything is saved.
 
 ## How it works
 
@@ -89,10 +91,47 @@ cv/applications/<company>-<role>/build/<FirstName>_<LastName>_Candidature_<Compa
 
 Always read the CV before sending it.
 
+### Web interface (candidate profile and CV import)
+
+Additional prerequisites: **Node.js 22** and **[Bun](https://bun.sh)** (the frontend lockfile is `frontend/bun.lock`).
+
+Install the frontend dependencies once:
+
+```bash
+cd frontend
+bun install --frozen-lockfile
+```
+
+Then start the two parts, each in its own terminal:
+
+```bash
+# Terminal 1 — backend (from the project root, with the virtual environment activated)
+source .venv/bin/activate
+uvicorn api.main:app --reload
+```
+
+```bash
+# Terminal 2 — frontend
+cd frontend
+npm run dev
+```
+
+Open **http://localhost:8080/candidat**. The frontend calls `/api/...`; Vite forwards these calls to the backend on `http://127.0.0.1:8000`.
+
+- Every change is saved directly in `profile/private/candidate.yaml` (comments and formatting are kept), through `candidate/manager.py`.
+- CV import calls Claude through the backend only (`candidate/import_cv.py`), which can take 1 to 3 minutes. Extracted proposals are kept in `profile/private/extracted/` and can be reopened from the import page without a new extraction.
+- To try the interface without the backend, with fictional data: create `frontend/.env.local` with `VITE_API_MODE=mock` (see `frontend/.env.example`). CV import is not available in this mode.
+- If Node.js runs as x64 on an Apple Silicon Mac (Rosetta), install with `bun install --frozen-lockfile --cpu=x64` so that native modules match Node.
+
 ### Tests
 
 ```bash
-python -m unittest discover tests
+python -m unittest discover tests      # Python (profile, import, API — temporary profiles, Claude mocked)
+
+cd frontend
+npx tsc --noEmit                        # TypeScript
+npm test                                # frontend unit tests (Vitest)
+npm run build                           # production build
 ```
 
 ## Project structure
@@ -101,9 +140,15 @@ python -m unittest discover tests
 job-application-agent/
 ├── main.py                     # command-line entry point: URL → CV PDF
 ├── requirements.txt
+├── api/
+│   └── main.py                 # local FastAPI backend for the web interface
+├── frontend/                   # React web interface (Lovable, TanStack Start)
 ├── candidate/
 │   ├── profile.py              # reads and validates the candidate profile
-│   └── manager.py              # edits the profile (adding an experience for now)
+│   ├── manager.py              # edits the profile (add, update, delete)
+│   ├── import_cv.py            # CV PDF → extraction proposal (JSON)
+│   ├── review_import.py        # compares a proposal with the profile
+│   └── apply_import.py         # applies the user's decisions (all or nothing)
 ├── browser/
 │   └── read_job.py             # reads a job offer page (Playwright)
 ├── llm/
@@ -130,10 +175,8 @@ Already working: everything listed in [Features](#features).
 
 Planned:
 
-- **Complete, editable candidate profile**: manage experiences, projects, skills and education without editing YAML by hand.
-- **Import an existing CV (PDF)** to initialize the profile.
 - **More explainable matching**: show why each experience or project was selected for an offer.
-- **Graphical interface**.
+- **Generate CVs and track applications from the web interface** (the « Mes CV », « Candidatures » and « Paramètres » sections).
 - **More features**: read the candidate's GitHub projects, edit the CV with the AI, track applications.
 - **Possibly later**: automate the applications themselves.
 
@@ -142,3 +185,4 @@ Planned:
 - Your profile (`profile/private/`), your reference CVs (`cv/reference/`) and your generated CVs (`cv/applications/`) are stored **locally** and **ignored by Git**, so they are never committed.
 - **Processing is not entirely local**: the job offer, your profile and your reference CVs are sent to Claude through the Claude Code CLI to analyze the offer, write and check the CV. They are processed by Anthropic according to the terms of your Claude account.
 - Do not put information in your profile that you do not want to send to the AI provider.
+- Imported CVs are copied to `profile/private/imports/` and their extraction proposals are saved in `profile/private/extracted/` (both ignored by Git). The text of an imported CV is sent to Claude for extraction.

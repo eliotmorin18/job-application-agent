@@ -2,3 +2,7 @@ playwright==1.63.0
 PyYAML>=6.0
 ruamel.yaml>=0.18
 pypdf>=6.0
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+httpx2>=2.0

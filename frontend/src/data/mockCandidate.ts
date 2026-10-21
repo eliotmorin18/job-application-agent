@@ -1,0 +1,162 @@
+import type { CandidateProfile } from "@/services/api/types";
+
+// Fictional candidate used for the demo mode. Not real personal data.
+export const mockCandidate: CandidateProfile = {
+  personal: {
+    first_name: "Camille",
+    last_name: "Moreau",
+    email: "camille.moreau@example.com",
+    phone: "+33 6 12 34 56 78",
+    city: "Lyon",
+    country: "France",
+    address: "12 rue de la République",
+    postal_code: "69002",
+    linkedin: "https://linkedin.com/in/camille-moreau-demo",
+    github: "https://github.com/camille-moreau-demo",
+    birth_date: "1999-04",
+    nationality: "Française",
+    gender: "Femme",
+  },
+  career: {
+    academic_status: "graduated",
+    employment_status: "job_seeking",
+    graduation_date: "2025-09",
+  },
+  experiences: [
+    {
+      id: "exp_7f3a21",
+      company: "Visiolab",
+      title: "Ingénieure Computer Vision (stage de fin d'études)",
+      start_date: "2025-02",
+      end_date: "2025-08",
+      location: "Lyon, France",
+      context:
+        "Start-up de 30 personnes spécialisée dans l'inspection visuelle automatisée pour l'industrie agroalimentaire.",
+      description:
+        "Conception d'un pipeline de détection d'anomalies sur lignes de production, de la collecte des données jusqu'au déploiement sur GPU embarqué.",
+      responsibilities: [
+        "Constituer et annoter un jeu de données de 40 000 images",
+        "Entraîner et comparer plusieurs modèles de segmentation",
+        "Déployer le modèle retenu sur NVIDIA Jetson",
+      ],
+      achievements: [
+        "Réduction de 35 % des faux positifs par rapport au système existant",
+        "Temps d'inférence divisé par 3 grâce à TensorRT",
+      ],
+      skills: ["Python", "PyTorch", "OpenCV", "SAM", "TensorRT", "Docker"],
+      priority: "high",
+      tags: ["computer-vision", "industrie", "déploiement"],
+    },
+    {
+      id: "exp_b81c04",
+      company: "Datanova",
+      title: "Data Scientist (stage)",
+      start_date: "2024-06",
+      end_date: "2024-09",
+      location: "Paris, France",
+      context: "Cabinet de conseil en données accompagnant des acteurs du retail.",
+      description:
+        "Développement de modèles de prévision de la demande pour optimiser les stocks de 120 magasins.",
+      responsibilities: [
+        "Nettoyer et explorer les historiques de ventes",
+        "Construire des modèles de séries temporelles",
+      ],
+      achievements: ["Erreur de prévision réduite de 18 % (MAPE)"],
+      skills: ["Python", "pandas", "LightGBM", "SQL"],
+      priority: "medium",
+      tags: ["data-science", "retail"],
+    },
+    {
+      id: "exp_c92e17",
+      company: "Association Code & Lumière",
+      title: "Animatrice d'ateliers de programmation",
+      start_date: "2022",
+      end_date: "2024",
+      location: "Lyon, France",
+      description: "Animation bénévole d'ateliers d'initiation à Python pour lycéens.",
+      skills: ["Pédagogie", "Python"],
+      priority: "low",
+      tags: ["bénévolat"],
+    },
+  ],
+  education: [
+    {
+      id: "edu_4d21aa",
+      school: "INSA Lyon",
+      degree: "Diplôme d'ingénieur",
+      specialization: "Informatique — option Intelligence Artificielle",
+      start_date: "2020-09",
+      end_date: "2025-09",
+      location: "Villeurbanne, France",
+      details: [
+        "Projet de fin d'études en vision par ordinateur",
+        "Cours principaux : deep learning, optimisation, systèmes distribués",
+      ],
+    },
+    {
+      // Legacy entry without id on purpose.
+      school: "Universidad Politécnica de Madrid",
+      degree: "Semestre d'échange",
+      specialization: "Machine Learning",
+      start_date: "2023-09",
+      end_date: "2024-01",
+      location: "Madrid, Espagne",
+      details: ["Cours dispensés en espagnol et en anglais"],
+    },
+  ],
+  projects: [
+    {
+      id: "prj_1a9f33",
+      name: "Segmentation open-vocabulary",
+      start_date: "2024-10",
+      end_date: "2025-01",
+      context: "Projet de recherche académique, équipe de 3 étudiants.",
+      description:
+        "Combinaison de Grounding DINO et SAM pour segmenter des objets à partir de requêtes textuelles libres.",
+      responsibilities: ["Intégration des modèles", "Évaluation sur COCO et LVIS"],
+      achievements: ["Présentation lors du séminaire IA de l'école"],
+      skills: ["Python", "PyTorch", "Grounding DINO", "SAM"],
+      github_url: "https://github.com/camille-moreau-demo/ov-segmentation",
+      priority: "high",
+      tags: ["recherche", "computer-vision"],
+    },
+    {
+      id: "prj_5e7b90",
+      name: "Assistant de recettes",
+      start_date: "2024-03",
+      end_date: "2024-05",
+      description:
+        "Application web proposant des recettes à partir d'une photo du contenu du réfrigérateur.",
+      skills: ["FastAPI", "React", "YOLOv8"],
+      github_url: "https://github.com/camille-moreau-demo/fridge-chef",
+      priority: "medium",
+      tags: ["web", "side-project"],
+    },
+    {
+      id: "prj_8c2d45",
+      name: "Tableau de bord qualité de l'air",
+      start_date: "2023",
+      description: "Visualisation en temps réel des données de capteurs publics de la métropole de Lyon.",
+      skills: ["Python", "Streamlit", "SQL"],
+      priority: "low",
+      tags: ["data-viz"],
+    },
+  ],
+  skills: {
+    Programming: ["Python", "TypeScript", "SQL", "C++"],
+    "Computer Vision": ["PyTorch", "OpenCV", "Grounding DINO", "SAM", "YOLOv8"],
+    "Machine Learning": ["scikit-learn", "LightGBM", "pandas", "Séries temporelles"],
+    Tools: ["Git", "Docker", "Linux", "FastAPI"],
+  },
+  languages: [
+    { language: "Français", level: "Native" },
+    { language: "Anglais", level: "C1" },
+    { language: "Espagnol", level: "B1" },
+  ],
+  interests: ["Escalade", "Photographie argentique", "Jeux de société", "Randonnée"],
+  preferences: {
+    target_roles: ["Ingénieure Computer Vision", "Machine Learning Engineer"],
+    preferred_locations: ["Lyon", "Grenoble", "Télétravail"],
+    employment_types: ["CDI", "Temps plein"],
+  },
+};

@@ -16,7 +16,9 @@ Aucun statut n'entraîne d'action automatique.
 """
 
 import json
+import re
 import sys
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -70,6 +72,15 @@ def _norm(text) -> str:
     return _slug(str(text or "")).replace("-", " ")
 
 
+def _skill_norm(text) -> str:
+    """
+    Comme _norm, mais « + » et « # » comptent : « C », « C++ » et « C# » sont trois compétences.
+    Casse, accents et espaces restent ignorés (« PYTHON » = « python »). Seulement pour les compétences.
+    """
+    ascii_text = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().lower()
+    return " ".join(re.findall(r"[a-z0-9+#]+", ascii_text))
+
+
 def _same_meaning(a, b, groups: list[set]) -> bool:
     a, b = _norm(a), _norm(b)
     return bool(a) and (a == b or any(a in group and b in group for group in groups))
@@ -115,7 +126,8 @@ def _differences(extracted: dict, existing: dict) -> dict:
         if current in (None, "", []):
             differences[field] = {"extracted": value, "current": None, "change": "missing_in_profile"}
         elif isinstance(value, list) and isinstance(current, list):
-            added = [item for item in value if not any(_norm(item) == _norm(known) for known in current)]
+            same = _skill_norm if field == "skills" else _norm
+            added = [item for item in value if not any(same(item) == same(known) for known in current)]
             if added:
                 differences[field] = {"extracted": value, "current": current, "change": "new_values", "new_values": added}
         elif _norm(value) != _norm(current):
@@ -183,7 +195,8 @@ def _review_skills(extracted: dict, existing: dict) -> list[dict]:
     for category, skills in extracted.items():
         target = existing_keys.get(_category_key(category))
         for skill in skills:
-            found = [(name, value) for name, values in existing.items() for value in values or [] if _norm(value) == _norm(skill)]
+            found = [(name, value) for name, values in existing.items() for value in values or []
+                     if _skill_norm(value) == _skill_norm(skill)]
             same_category = [match for match in found if match[0] == target]
             review = {
                 "category": category,
