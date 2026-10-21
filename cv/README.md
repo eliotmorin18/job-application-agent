@@ -10,6 +10,7 @@ cette page détaille le template et la compilation.
 ```
 cv/
 ├── cli.py                 # point d'entrée : python -m cv.cli "<URL>" (offre → CV PDF)
+├── pipeline.py            # le pipeline complet, utilisé par la CLI et par l'API (api/cvs.py)
 ├── generate.py            # Claude choisit les éléments du profil et rédige le contenu (JSON)
 ├── verify.py              # Claude vérifie le contenu du CV contre le profil
 ├── document.py            # CV structuré (cv.json) : schéma, construction, validation, sauvegarde

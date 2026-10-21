@@ -7,6 +7,8 @@ Les routes ne font qu'appeler candidate/manager.py (profil), candidate/import_cv
 candidate/review_import.py et candidate/apply_import.py (import d'un CV) : toute la
 validation et l'écriture du YAML restent dans ces modules.
 
+Les routes des CV (génération, liste, lecture, modification) sont dans api/cvs.py.
+
 Les erreurs sont renvoyées au format :
     {"detail": {"message": "...", "problems": ["...", "..."]}}
 """
@@ -23,15 +25,18 @@ from fastapi.responses import JSONResponse
 
 from candidate import import_cv as import_module
 from candidate import manager
-from candidate import profile as profile_module
 from candidate.apply_import import DecisionError, apply_import
 from candidate.import_cv import CVImportError, import_cv
 from candidate.manager import ITEM_KINDS, ItemError
 from candidate.profile import ProfileError, load_profile
 from candidate.review_import import ReviewError, review_import
+from api import cvs
+from api.common import ApiError, profile_path
+from cv.document import CVDocumentError
 
 
 app = FastAPI(title="Job Application Agent")
+app.include_router(cvs.router)
 
 ITEM_SECTIONS = {kind.section: kind for kind in ITEM_KINDS.values()}
 ADD_FUNCTIONS = {"experiences": manager.add_experience, "projects": manager.add_project, "education": manager.add_education}
@@ -41,21 +46,12 @@ IMPORT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # ---------- Où sont les fichiers (remplacés par des dossiers temporaires dans les tests) ----------
 
-def profile_path() -> Path:
-    return profile_module.CANDIDATE_PATH
-
-
 def import_dirs() -> tuple[Path, Path]:
     """(dossier des PDF importés, dossier des propositions extraites)"""
     return import_module.IMPORTS_DIR, import_module.EXTRACTED_DIR
 
 
 # ---------- Erreurs ----------
-
-class ApiError(Exception):
-    def __init__(self, status: int, message: str, problems: list[str] | None = None):
-        self.status, self.message, self.problems = status, message, problems or [message]
-
 
 def _error(status: int, message: str, problems: list[str]) -> JSONResponse:
     return JSONResponse(status_code=status, content={"detail": {"message": message, "problems": problems}})
@@ -84,6 +80,11 @@ def _decision_error(request: Request, error: DecisionError):
 @app.exception_handler(CVImportError)
 def _import_error(request: Request, error: CVImportError):
     return _error(422, "Import impossible", [str(error)])
+
+
+@app.exception_handler(CVDocumentError)
+def _cv_document_error(request: Request, error: CVDocumentError):
+    return _error(422, "CV invalide : rien n'a été enregistré", error.problems)
 
 
 # ---------- Outils ----------

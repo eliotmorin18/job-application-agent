@@ -24,15 +24,16 @@ def _ascii_words(text: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9]+", ascii_text)
 
 
-def _new_application_dir(company: str, role: str) -> Path:
+def _new_application_dir(company: str, role: str, applications_dir: Path | None = None) -> Path:
     """cv/applications/<company>-<role>/, avec -2, -3... si le dossier existe déjà."""
 
-    base = "-".join(_ascii_words(company) + _ascii_words(role)).lower()
-    folder = APPLICATIONS_DIR / base
+    applications_dir = Path(applications_dir) if applications_dir else APPLICATIONS_DIR
+    base = "-".join(_ascii_words(company) + _ascii_words(role)).lower() or "cv"
+    folder = applications_dir / base
     number = 2
 
     while folder.exists():
-        folder = APPLICATIONS_DIR / f"{base}-{number}"
+        folder = applications_dir / f"{base}-{number}"
         number += 1
 
     return folder
@@ -45,7 +46,8 @@ def write_sections(folder: Path, doc: dict) -> None:
         (Path(folder) / "sections" / f"{name}.tex").write_text(content.strip() + "\n", encoding="utf-8")
 
 
-def write_cv(doc: dict, offer: dict, verification_issues: list | None = None) -> Path:
+def write_cv(doc: dict, offer: dict, verification_issues: list | None = None,
+             applications_dir: Path | None = None) -> Path:
     """
     Crée cv/applications/<company>-<role>/ depuis le template, y écrit le CV structuré
     (cv.json), les sections LaTeX calculées à partir de lui, l'offre et la sélection,
@@ -53,7 +55,7 @@ def write_cv(doc: dict, offer: dict, verification_issues: list | None = None) ->
     """
 
     validate_document(doc)
-    folder = _new_application_dir(doc["company"], doc["role"])
+    folder = _new_application_dir(doc["company"], doc["role"], applications_dir)
 
     shutil.copytree(TEMPLATE_DIR, folder)
 

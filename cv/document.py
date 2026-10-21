@@ -23,6 +23,8 @@ Modifier un CV ne modifie jamais candidate.yaml.
 """
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from candidate.manager import _existing_ids, _slug, _unique_id
@@ -326,10 +328,15 @@ def validate_document(doc, profile_data: dict | None = None) -> None:
 # ---------- Sauvegarde et relecture ----------
 
 def save_document(folder: Path, doc: dict, profile_data: dict | None = None) -> Path:
-    """Valide puis écrit <folder>/cv.json (UTF-8, lisible). Renvoie le chemin."""
+    """
+    Valide puis écrit <folder>/cv.json (UTF-8, lisible). Renvoie le chemin. L'écriture passe par
+    un fichier temporaire : un cv.json valide n'est jamais remplacé par un fichier invalide ou partiel.
+    """
     validate_document(doc, profile_data)
     path = Path(folder) / DOCUMENT_FILE
-    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False) as temporary:
+        temporary.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    os.replace(temporary.name, path)
     return path
 
 

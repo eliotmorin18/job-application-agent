@@ -13,6 +13,7 @@ from unittest import mock
 import yaml
 
 from cv import cli
+from cv import pipeline
 from candidate.profile import EXAMPLE_PATH, CandidateProfile, ProfileError, load_profile, validate_profile
 from cv import generate as generate_cv_module
 from cv import verify as verify_cv_module
@@ -191,8 +192,8 @@ class PipelineIntegrationTest(unittest.TestCase):
         bad.write_text("personal:\n  first_name: Jane\n", encoding="utf-8")
 
         with mock.patch("candidate.profile.CANDIDATE_PATH", bad), \
-             mock.patch.object(cli, "read_job") as read_job, \
-             mock.patch.object(cli, "analyze_job") as analyze_job, \
+             mock.patch.object(pipeline, "read_job") as read_job, \
+             mock.patch.object(pipeline, "analyze_job") as analyze_job, \
              mock.patch("builtins.print"):
             with self.assertRaises(SystemExit) as context:
                 cli.main("https://example.com/job")
@@ -231,12 +232,12 @@ class PipelineIntegrationTest(unittest.TestCase):
         issues = [{"section": "heading", "cv_text": "x", "problem": "y"}]
 
         with mock.patch.object(cli, "load_profile", return_value=profile) as load, \
-             mock.patch.object(cli, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
-             mock.patch.object(cli, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
-             mock.patch.object(cli, "generate_cv", return_value=build_document(fake_draft(), profile)) as generate, \
-             mock.patch.object(cli, "verify_cv", side_effect=[issues, []]) as verify, \
-             mock.patch.object(cli, "write_cv", return_value=Path("cv/applications/x/x.tex")) as write, \
-             mock.patch.object(cli, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
+             mock.patch.object(pipeline, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
+             mock.patch.object(pipeline, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
+             mock.patch.object(pipeline, "generate_cv", return_value=build_document(fake_draft(), profile)) as generate, \
+             mock.patch.object(pipeline, "verify_cv", side_effect=[issues, []]) as verify, \
+             mock.patch.object(pipeline, "write_cv", return_value=Path("cv/applications/x/x.tex")) as write, \
+             mock.patch.object(pipeline, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
              mock.patch("builtins.print"):
             cli.main("https://example.com/job")
 
@@ -250,6 +251,43 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertIs(call.args[1], profile)
         # La correction reçoit le CV précédent et ses problèmes ; il ne reste aucun problème à l'écriture
         self.assertEqual(generate.call_args_list[1].kwargs["issues"], issues)
+        self.assertEqual(write.call_args.kwargs["verification_issues"], [])
+
+    def test_cli_output_is_unchanged(self):
+        profile = load_profile(EXAMPLE_PATH)
+        doc = build_document(fake_draft(), profile)
+        issues = [{"section": "experience", "cv_text": "mAP", "problem": "absent"}]
+        printed = []
+        with mock.patch.object(cli, "load_profile", return_value=profile), \
+             mock.patch.object(pipeline, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
+             mock.patch.object(pipeline, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
+             mock.patch.object(pipeline, "generate_cv", return_value=doc), \
+             mock.patch.object(pipeline, "verify_cv", side_effect=[issues, []]), \
+             mock.patch.object(pipeline, "write_cv", return_value=Path("cv/applications/x/x.tex")) as write, \
+             mock.patch.object(pipeline, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 2)), \
+             mock.patch("builtins.print", side_effect=lambda *a: printed.append(" ".join(map(str, a)))):
+            cli.main("https://example.com/job")
+
+        self.assertEqual(printed, [
+            "1/5 Lecture de l'offre...",
+            "2/5 Analyse de l'offre par Claude...",
+            "    Stage — Acme",
+            "3/5 Rédaction du CV par Claude...",
+            "4/5 Vérification du CV contre candidate.yaml...",
+            "    1 affirmation(s) absente(s) de ton profil, correction 1/2 :",
+            "  - [experience] « mAP » : absent",
+            "    OK : tout ce qui est dans le CV vient de ton profil.",
+            "5/5 Compilation LaTeX...",
+            "",
+            "Expériences choisies : example-research-company, example-software-company",
+            "Projets choisis      : multi-agent-system, face-recognition",
+            "Points de l'offre non couverts par ton profil :",
+            "  - Pas d'expérience en robotique industrielle.",
+            "\nAttention : le CV fait 2 pages au lieu d'une.",
+            "\nCV généré : cv/applications/x/build/x.pdf",
+        ])
+        # L'URL est gardée avec l'offre (offer.json), sans être envoyée à Claude
+        self.assertEqual(write.call_args.args[1]["source_url"], "https://example.com/job")
         self.assertEqual(write.call_args.kwargs["verification_issues"], [])
 
     def test_generator_sends_structured_request_without_latex(self):

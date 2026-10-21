@@ -1,21 +1,36 @@
 import sys
 
 from candidate.profile import ProfileError, load_profile
-from cv.build_cv import compile_cv, write_cv
 from cv.document import selected_ids
-from cv.generate import generate_cv
-from cv.verify import verify_cv
-from jobs.analyze_job import analyze_job
-from jobs.read_job import normalize_job_url, read_job
-
-
-# Nombre de fois où Claude peut réécrire le CV si la vérification trouve des choses inventées
-MAX_CORRECTIONS = 2
+from cv.pipeline import MAX_CORRECTIONS, generate_from_url
 
 
 def _print_issues(issues: list[dict]) -> None:
     for issue in issues:
         print(f"  - [{issue['section']}] « {issue['cv_text']} » : {issue['problem']}")
+
+
+def _print_step(step: str, **details) -> None:
+    """Affichage de chaque étape du pipeline (cv/pipeline.py), comme avant."""
+
+    if step == "read_offer":
+        print("1/5 Lecture de l'offre...")
+    elif step == "analyze_offer":
+        print("2/5 Analyse de l'offre par Claude...")
+    elif step == "offer_analyzed":
+        print(f"    {details['offer']['job_title']} — {details['offer']['company']}")
+    elif step == "write_cv":
+        print("3/5 Rédaction du CV par Claude...")
+    elif step == "verify_cv":
+        print("4/5 Vérification du CV contre candidate.yaml...")
+    elif step == "correct_cv":
+        issues = details["issues"]
+        print(f"    {len(issues)} affirmation(s) absente(s) de ton profil, correction {details['attempt']}/{MAX_CORRECTIONS} :")
+        _print_issues(issues)
+    elif step == "verified" and not details["issues"]:
+        print("    OK : tout ce qui est dans le CV vient de ton profil.")
+    elif step == "compile":
+        print("5/5 Compilation LaTeX...")
 
 
 def main(url: str) -> None:
@@ -28,38 +43,8 @@ def main(url: str) -> None:
         print(error)
         sys.exit(1)
 
-    url = normalize_job_url(url)
-
-    print("1/5 Lecture de l'offre...")
-    job = read_job(url)
-
-    print("2/5 Analyse de l'offre par Claude...")
-    offer = analyze_job(job)
-    print(f"    {offer['job_title']} — {offer['company']}")
-
-    print("3/5 Rédaction du CV par Claude...")
-    cv = generate_cv(offer, profile)
-
-    print("4/5 Vérification du CV contre candidate.yaml...")
-    issues = verify_cv(cv, profile)
-
-    for attempt in range(1, MAX_CORRECTIONS + 1):
-        if not issues:
-            break
-
-        print(f"    {len(issues)} affirmation(s) absente(s) de ton profil, correction {attempt}/{MAX_CORRECTIONS} :")
-        _print_issues(issues)
-
-        cv = generate_cv(offer, profile, previous_cv=cv, issues=issues)
-        issues = verify_cv(cv, profile)
-
-    if not issues:
-        print("    OK : tout ce qui est dans le CV vient de ton profil.")
-
-    main_tex = write_cv(cv, offer, verification_issues=issues)
-
-    print("5/5 Compilation LaTeX...")
-    pdf, pages = compile_cv(main_tex)
+    result = generate_from_url(url, profile, on_step=_print_step)
+    cv, issues, pages = result.document, result.issues, result.pages
 
     print()
     experience_ids, project_ids = selected_ids(cv)
@@ -82,7 +67,7 @@ def main(url: str) -> None:
     if pages > 1:
         print(f"\nAttention : le CV fait {pages} pages au lieu d'une.")
 
-    print(f"\nCV généré : {pdf}")
+    print(f"\nCV généré : {result.pdf}")
 
 
 if __name__ == "__main__":

@@ -128,10 +128,26 @@ Open **http://localhost:8080/candidat**. The frontend calls `/api/...`; Vite for
 - To try the interface without the backend, with fictional data: create `frontend/.env.local` with `VITE_API_MODE=mock` (see `frontend/.env.example`). CV import is not available in this mode.
 - If Node.js runs as x64 on an Apple Silicon Mac (Rosetta), install with `bun install --frozen-lockfile --cpu=x64` so that native modules match Node.
 
+The backend also exposes the "My CVs" routes (not used by the interface yet):
+
+| Route | Purpose |
+|---|---|
+| `POST /api/cvs/generate` `{"url": "..."}` | starts a generation in the background → `{"task_id", "status"}` (202) |
+| `GET /api/cvs/tasks/{task_id}` | `status` (`pending`, `running`, `completed`, `failed`), `step`, `step_label`, `error`, `cv_id`, `result` |
+| `GET /api/cvs` | the saved CVs with their metadata (company, role, pages, `fits_one_page`, `editable`…) |
+| `GET /api/cvs/{cv_id}` | `{"cv": metadata, "document": cv.json, "verification_issues"}` |
+| `GET /api/cvs/{cv_id}/pdf`, `/layout` | the PDF and its clickable zones (`layout.json`) |
+| `PUT /api/cvs/{cv_id}` | saves an edited `cv.json` and recompiles; the previous version is kept if compilation fails |
+
+Generations run one at a time in a background thread; their status is kept in memory (lost when the server restarts, the CVs are not). Offer URLs must be public web pages: local and internal addresses are refused.
+
+Reading an offer is protected the same way inside the browser (`jobs/read_job.py`): every request of the page, redirects included, is checked, and anything pointing to localhost, a private, loopback, link-local or reserved address is blocked. Redirects are never followed by the browser itself, each step is checked first. Images, fonts and media are not loaded, and WebSocket/WebRTC connections are disabled (not needed to read an offer).
+
 ### Tests
 
 ```bash
 python -m unittest discover tests      # Python (profile, import, API — temporary profiles, Claude mocked)
+RUN_BROWSER_TESTS=1 python -m unittest tests.test_read_job_browser   # optional: real Chromium, local servers only
 
 cd frontend
 npx tsc --noEmit                        # TypeScript
@@ -146,7 +162,9 @@ job-application-agent/
 ├── main.py                     # former entry point, kept for compatibility (→ cv/cli.py)
 ├── requirements.txt
 ├── api/
-│   └── main.py                 # local FastAPI backend for the web interface
+│   ├── main.py                 # local FastAPI backend for the web interface (profile, CV import)
+│   ├── cvs.py                  # "My CVs" routes: generation tasks, list, read, PDF, layout, edit
+│   └── common.py               # shared error format and profile path
 ├── frontend/                   # React web interface (Lovable, TanStack Start)
 ├── candidate/
 │   ├── profile.py              # reads and validates the candidate profile
@@ -156,10 +174,12 @@ job-application-agent/
 │   ├── review_import.py        # compares a proposal with the profile
 │   └── apply_import.py         # applies the user's decisions (all or nothing)
 ├── jobs/
+│   ├── url_check.py            # refuses local and internal URLs (before and during the browser navigation)
 │   ├── read_job.py             # reads a job offer page (Playwright)
 │   └── analyze_job.py          # job offer → structured JSON (Claude)
 ├── cv/
 │   ├── cli.py                  # command-line entry point: URL → CV PDF (python -m cv.cli)
+│   ├── pipeline.py             # the generation pipeline, shared by the CLI and the API
 │   ├── generate.py             # selects profile items and writes the CV content (Claude)
 │   ├── verify.py               # checks the CV against the profile (Claude)
 │   ├── document.py             # structured CV (cv.json): schema, validation, save/load
