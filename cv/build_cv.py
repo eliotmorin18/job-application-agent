@@ -6,6 +6,7 @@ import unicodedata
 from pathlib import Path
 
 from cv.document import load_document, save_document, selected_ids, validate_document
+from cv.layout import LAYOUT_FILE, write_layout
 from cv.render import render_sections
 
 
@@ -95,10 +96,18 @@ def rebuild_cv(folder: Path, timeout: int = 180) -> tuple[Path, int]:
 
 
 def compile_cv(main_tex: Path, timeout: int = 180) -> tuple[Path, int]:
-    """Compile le CV avec latexmk dans build/ et renvoie (chemin du PDF, nombre de pages)."""
+    """
+    Compile le CV avec latexmk dans build/ et renvoie (chemin du PDF, nombre de pages).
+    Écrit aussi build/layout.json (zones cliquables, cv/layout.py) à partir de la même
+    compilation ; l'ancien est supprimé avant, pour qu'un échec n'en laisse jamais d'obsolète.
+    """
 
     if shutil.which("latexmk") is None:
         raise RuntimeError("La commande 'latexmk' est introuvable. LaTeX (MacTeX) est-il installé ?")
+
+    layout = main_tex.parent / "build" / LAYOUT_FILE
+    if layout.exists():
+        layout.unlink()
 
     result = subprocess.run(
         [
@@ -123,8 +132,11 @@ def compile_cv(main_tex: Path, timeout: int = 180) -> tuple[Path, int]:
         raise RuntimeError(f"La compilation LaTeX a échoué ({main_tex}) :\n{details}")
 
     log = (main_tex.parent / "build" / main_tex.with_suffix(".log").name).read_text(errors="ignore")
+    pages = _count_pages(log)
 
-    return pdf, _count_pages(log)
+    write_layout(main_tex.parent / "build", pdf, pages)
+
+    return pdf, pages
 
 
 def _count_pages(log: str) -> int:

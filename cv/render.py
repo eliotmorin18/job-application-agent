@@ -5,6 +5,11 @@ Produit les six fichiers de section chargés par cv/template/main.tex, avec les 
 mise en page du template (\\resumeItemPlain, \\resumeItemListStart, tabular*...). Claude
 n'écrit jamais de LaTeX : tout le texte passe par escape_latex(). Seule mise en forme
 permise dans les textes : **gras**.
+
+Des marqueurs invisibles \\cvanchor{clé} (définis dans main.tex) repèrent la position de
+chaque section et de chaque élément dans le PDF ; cv/layout.py en déduit les zones
+cliquables. Clés : profile, experiences, experiences/0, education, education/0, projects,
+projects/0, skills, interests (et end, dans main.tex).
 """
 
 import re
@@ -85,6 +90,16 @@ def short_location(location) -> str:
 
 # ---------- Sections ----------
 
+# Clé de zone (cv/layout.py) de chaque fichier de section : la clé JSON, sauf profile = header
+SECTION_KEYS = {"heading": "profile", "experience": "experiences", "education": "education",
+                "projects": "projects", "technical-skills": "skills", "interests": "interests"}
+
+
+def anchor(key: str) -> str:
+    """Marqueur invisible : aucune place, aucun effet visuel ; seule sa position est notée."""
+    return f"\\cvanchor{{{key}}}"
+
+
 def _banner(title: str) -> str:
     return f"%===========================\n%     {title}\n%===========================\n"
 
@@ -97,7 +112,9 @@ def _item_list(bullets: list) -> str:
     return f"\n\\resumeItemListStart\n{lines}\n\\resumeItemListEnd\n"
 
 
-def _entry(left: str, right: str, bullets: list) -> str:
+def _entry(key: str, left: str, right: str, bullets: list) -> str:
+    # Le marqueur est placé au début du texte de gauche (en gras), dans la ligne : il ne décale rien
+    left = left.replace("\\textbf{", "\\textbf{" + anchor(key), 1)
     return (
         "\\begin{tabular*}{\\textwidth}{l@{\\extracolsep{\\fill}}r}\n"
         f"    {left} & {right} \\\\\n"
@@ -126,12 +143,14 @@ def render_heading(doc: dict) -> str:
             shown = f"\\href{{{latex_url(value)}}}{{{escape_latex(display_url(value))}}}"
         contacts.append(f"{icons[kind]}\\ {shown}")
 
-    name = f"\\textbf{{\\Huge \\scshape {escape_latex(header['name'])}}}"
+    name = f"\\textbf{{\\Huge \\scshape {anchor('profile')}{escape_latex(header['name'])}}}"
     lines = [name + (" \\\\ \\vspace{2pt}" if contacts else "")]
     if contacts:
         lines.append("\\small " + "\\ $|$\\\n    ".join(contacts))
 
-    text = "%----------HEADING-----------------\n\\begin{center}\n    " + "\n    ".join(lines) + "\n\\end{center}\n"
+    # Sans effet si main.tex définit déjà \\cvanchor (CV créés avant les marqueurs : marqueurs ignorés)
+    text = ("%----------HEADING-----------------\n\\providecommand{\\cvanchor}[1]{}\n"
+            "\\begin{center}\n    " + "\n    ".join(lines) + "\n\\end{center}\n")
     if header.get("summary"):
         text += (f"\n\\vspace{{4pt}}\n\\textbf{{{labels['summary']}{labels['colon']}}} "
                  f"{escape_latex(header['summary'])}\n\n\\vspace{{2pt}}\n")
@@ -140,29 +159,31 @@ def render_heading(doc: dict) -> str:
 
 def render_experiences(doc: dict) -> str:
     entries = []
-    for entry in doc["experiences"]:
+    for n, entry in enumerate(doc["experiences"]):
         title = " — ".join(escape_latex(part) for part in (entry["title"], entry.get("organization")) if part)
         left = f"\\textbf{{{title}}}"
         if entry.get("context"):
             left += f" \\textnormal{{({escape_latex(entry['context'])})}}"
-        entries.append(_entry(left, _place_and_dates(entry), entry.get("bullets") or []))
+        entries.append(_entry(f"experiences/{n}", left, _place_and_dates(entry), entry.get("bullets") or []))
     return _section(doc, "experience", "EXPERIENCE", entries)
 
 
 def render_education(doc: dict) -> str:
     entries = [
-        _entry(f"\\textbf{{{escape_latex(entry['institution'])}}}", _place_and_dates(entry), entry.get("bullets") or [])
-        for entry in doc["education"]
+        _entry(f"education/{n}", f"\\textbf{{{escape_latex(entry['institution'])}}}", _place_and_dates(entry),
+               entry.get("bullets") or [])
+        for n, entry in enumerate(doc["education"])
     ]
     return _section(doc, "education", "EDUCATION", entries)
 
 
 def render_projects(doc: dict) -> str:
     entries = []
-    for entry in doc["projects"]:
+    for n, entry in enumerate(doc["projects"]):
         link = entry.get("link")
         right = f"\\footnotesize\\href{{{latex_url(link['url'])}}}{{{escape_latex(link['label'])}}}" if link else ""
-        entries.append(_entry(f"\\textbf{{{escape_latex(entry['name'])}}}", right, entry.get("bullets") or []))
+        entries.append(_entry(f"projects/{n}", f"\\textbf{{{escape_latex(entry['name'])}}}", right,
+                              entry.get("bullets") or []))
     return _section(doc, "projects", "PROJECTS", entries)
 
 
@@ -198,7 +219,7 @@ def _section(doc: dict, name: str, banner: str, blocks: list) -> str:
     if not blocks:
         return _banner(banner) + "% (section vide : non affichée)\n"
     title = LABELS[doc["language"]][name]
-    return _banner(banner) + f"\\section*{{{title}}}\n\n" + "\n".join(blocks)
+    return _banner(banner) + f"\\section*{{{anchor(SECTION_KEYS[name])}{title}}}\n\n" + "\n".join(blocks)
 
 
 def render_sections(doc: dict) -> dict[str, str]:

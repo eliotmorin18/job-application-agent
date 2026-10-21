@@ -58,6 +58,23 @@
 \newcommand{\resumeItemListStart}{\vspace{-3pt}\begin{itemize}[leftmargin=0.15in, label={--}, itemsep=2pt, parsep=0pt, topsep=0pt]}
 \newcommand{\resumeItemListEnd}{\end{itemize}\vspace{7pt}}
 
+%-------------------------
+% Marqueurs invisibles (zones cliquables de l'éditeur) : \cvanchor{clé} n'affiche rien et
+% n'occupe aucune place ; il note la page et la position (pdfTeX) dans <nom>.cvpos.
+\makeatletter
+\newwrite\cv@posfile
+\AtBeginDocument{%
+  \immediate\openout\cv@posfile=\jobname.cvpos
+  \immediate\write\cv@posfile{page,\the\paperwidth,\the\paperheight,%
+    \the\dimexpr1in+\hoffset+\oddsidemargin\relax,\the\textwidth,%
+    \the\dimexpr1in+\voffset+\topmargin+\headheight+\headsep\relax,\the\textheight}}
+\newcommand{\cvanchor}[1]{%
+  \pdfsavepos
+  \edef\cv@write{\noexpand\write\noexpand\cv@posfile{#1,\noexpand\thepage,%
+    \noexpand\the\noexpand\pdflastxpos,\noexpand\the\noexpand\pdflastypos,\the\ht\strutbox}}%
+  \cv@write}
+\makeatother
+
 %-------------------------------------------
 %%%%%%  CV STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -72,4 +89,5 @@
 \input{sections/technical-skills}
 \input{sections/interests}
 
+\cvanchor{end}
 \end{document}

@@ -164,6 +164,7 @@ job-application-agent/
 │   ├── verify.py               # checks the CV against the profile (Claude)
 │   ├── document.py             # structured CV (cv.json): schema, validation, save/load
 │   ├── render.py               # cv.json → LaTeX sections (escaping, **bold**, layout)
+│   ├── layout.py               # clickable zones of the PDF (layout.json), from invisible markers
 │   ├── build_cv.py             # writes the CV folder and compiles the PDF
 │   ├── template/               # LaTeX template (main.tex + sections/)
 │   ├── reference/              # optional style references (local, ignored by Git)

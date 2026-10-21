@@ -93,8 +93,9 @@ class RenderTest(unittest.TestCase):
     def test_heading(self):
         self.assertEqual(render_sections(small_doc())["heading"], (
             "%----------HEADING-----------------\n"
+            "\\providecommand{\\cvanchor}[1]{}\n"
             "\\begin{center}\n"
-            "    \\textbf{\\Huge \\scshape Jane Doe} \\\\ \\vspace{2pt}\n"
+            "    \\textbf{\\Huge \\scshape \\cvanchor{profile}Jane Doe} \\\\ \\vspace{2pt}\n"
             "    \\small \\faEnvelope\\ \\href{mailto:jane@example.com}{jane@example.com}\\ $|$\\\n"
             "    \\faGithub\\ \\href{https://github.com/jane/}{github.com/jane}\n"
             "\\end{center}\n"
@@ -105,9 +106,9 @@ class RenderTest(unittest.TestCase):
     def test_experience(self):
         self.assertEqual(render_sections(small_doc())["experience"], (
             "%===========================\n%     EXPERIENCE\n%===========================\n"
-            "\\section*{Expérience}\n\n"
+            "\\section*{\\cvanchor{experiences}Expérience}\n\n"
             "\\begin{tabular*}{\\textwidth}{l@{\\extracolsep{\\fill}}r}\n"
-            "    \\textbf{Stagiaire IA — Acme} \\textnormal{(R\\&D)} & \\textbf{Paris, 2024–2025} \\\\\n"
+            "    \\textbf{\\cvanchor{experiences/0}Stagiaire IA — Acme} \\textnormal{(R\\&D)} & \\textbf{Paris, 2024–2025} \\\\\n"
             "\\end{tabular*}\n\n"
             "\\resumeItemListStart\n"
             "    \\resumeItemPlain{Mission A.}\n"
@@ -116,24 +117,25 @@ class RenderTest(unittest.TestCase):
 
     def test_education_projects_skills_interests(self):
         sections = render_sections(small_doc())
-        self.assertIn("\\section*{Formation}", sections["education"])
-        self.assertIn("    \\textbf{École X} & \\textbf{Paris, 2023} \\\\\n", sections["education"])
+        self.assertIn("\\section*{\\cvanchor{education}Formation}", sections["education"])
+        self.assertIn("    \\textbf{\\cvanchor{education/0}École X} & \\textbf{Paris, 2023} \\\\\n", sections["education"])
         self.assertIn("    \\resumeItemPlain{\\textbf{Cours :} ML.}\n", sections["education"])
-        self.assertIn("    \\textbf{Projet P} & \\footnotesize\\href{https://github.com/jane/p}{GitHub} \\\\\n",
+        self.assertIn("    \\textbf{\\cvanchor{projects/0}Projet P} & \\footnotesize\\href{https://github.com/jane/p}{GitHub} \\\\\n",
                       sections["projects"])
-        self.assertEqual(sections["technical-skills"].split("\\section*{Compétences Techniques}\n\n")[1], (
+        self.assertEqual(sections["technical-skills"].split("\\section*{\\cvanchor{skills}Compétences Techniques}\n\n")[1], (
             "\\begin{tabularx}{\\textwidth}{@{}l@{\\hspace{6pt}}X@{}}\n"
             "    \\textbf{Programmation :} & Python, C++ \\\\\n"
             "    \\textbf{Langues :} & Français (natif), Anglais \\\\\n"
             "\\end{tabularx}\n"))
-        self.assertTrue(sections["interests"].endswith("\\section*{Centres d'intérêt}\n\nTennis \\textbullet\\ Échecs\n"))
+        self.assertTrue(sections["interests"].endswith(
+            "\\section*{\\cvanchor{interests}Centres d'intérêt}\n\nTennis \\textbullet\\ Échecs\n"))
 
     def test_english_labels(self):
         sections = render_sections(small_doc("en"))
         self.assertIn("\\textbf{Profile:}", sections["heading"])
-        self.assertIn("\\section*{Experience}", sections["experience"])
+        self.assertIn("\\section*{\\cvanchor{experiences}Experience}", sections["experience"])
         self.assertIn("\\textbf{Languages:}", sections["technical-skills"])
-        self.assertIn("\\section*{Technical Skills}", sections["technical-skills"])
+        self.assertIn("\\section*{\\cvanchor{skills}Technical Skills}", sections["technical-skills"])
 
     def test_optional_parts_are_left_out(self):
         doc = small_doc()
@@ -143,9 +145,9 @@ class RenderTest(unittest.TestCase):
         sections = render_sections(doc)
         self.assertNotIn("\\\\ \\vspace{2pt}", sections["heading"])
         self.assertNotIn("Profil", sections["heading"])
-        self.assertIn("    \\textbf{Stagiaire IA} &  \\\\\n", sections["experience"])
+        self.assertIn("    \\textbf{\\cvanchor{experiences/0}Stagiaire IA} &  \\\\\n", sections["experience"])
         self.assertNotIn("resumeItemListStart", sections["experience"])       # pas de liste vide
-        self.assertIn("    \\textbf{Projet P} &  \\\\\n", sections["projects"])
+        self.assertIn("    \\textbf{\\cvanchor{projects/0}Projet P} &  \\\\\n", sections["projects"])
 
     def test_empty_sections_are_hidden(self):
         doc = small_doc()

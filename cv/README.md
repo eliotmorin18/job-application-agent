@@ -14,6 +14,7 @@ cv/
 ├── verify.py              # Claude vérifie le contenu du CV contre le profil
 ├── document.py            # CV structuré (cv.json) : schéma, construction, validation, sauvegarde
 ├── render.py              # cv.json -> les six sections LaTeX du template
+├── layout.py              # zones cliquables du PDF (build/layout.json)
 ├── build_cv.py            # écrit le dossier du CV + compile (appelé par cli.py)
 ├── template/              # squelette LaTeX générique (versionné sur git)
 │   ├── main.tex                      # préambule, packages, macros, assemblage
@@ -30,7 +31,7 @@ cv/
         ├── <Prénom>_<Nom>_Candidature_<Company>_<Role>.tex
         ├── cv.json           # contenu du CV : la référence (sections/*.tex en sont calculées)
         ├── sections/*.tex
-        ├── build/            # généré par latexmk (dont le PDF)
+        ├── build/            # généré par latexmk (dont le PDF et layout.json)
         ├── offer.json        # offre analysée
         └── selection.json    # choix de Claude + vérification
 ```
@@ -67,6 +68,31 @@ viennent de `personal.first_name` / `personal.last_name` du profil.
 `cv/reference/` et `cv/applications/` sont dans `.gitignore` : tout ce qui
 contient des données personnelles reste strictement local. Seul
 `cv/template/` (aucune donnée perso) est versionné.
+
+## Zones cliquables (futur éditeur)
+
+Des marqueurs invisibles `\cvanchor{clé}` (définis dans `template/main.tex`, placés par
+`render.py` dans le nom, les titres de section et l'en-tête de chaque élément) notent leur
+page et leur position pendant la compilation (pdfTeX, fichier `build/<nom>.cvpos`). Ils
+n'affichent rien et n'occupent aucune place : le PDF est identique au point près.
+
+Après chaque compilation réussie, `compile_cv` écrit `build/layout.json` (via `layout.py`) :
+une zone par section et par élément, en coordonnées normalisées (0 à 1, origine en haut à
+gauche), avec sa page et la partie de `cv.json` qu'elle représente :
+
+| Clé | Partie de `cv.json` |
+|---|---|
+| `profile` | `header` (nom, contacts, résumé) |
+| `experiences`, `experiences/0`… | `experiences`, `experiences[0]`… |
+| `education`, `education/0`… | `education`, `education[0]`… |
+| `projects`, `projects/0`… | `projects`, `projects[0]`… |
+| `skills` | `skills` et `languages` |
+| `interests` | `interests` |
+
+Une section vide n'a pas de zone ; une zone coupée par un saut de page donne une zone par
+page. Un clic sur un élément l'emporte sur sa section (`layout.region_at`). L'ancien
+`layout.json` est supprimé avant chaque compilation : un échec n'en laisse jamais
+d'obsolète. Les CV créés avant les marqueurs se compilent comme avant, sans `layout.json`.
 
 ## Style
 
