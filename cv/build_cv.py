@@ -5,6 +5,9 @@ import subprocess
 import unicodedata
 from pathlib import Path
 
+from cv.document import load_document, save_document, selected_ids, validate_document
+from cv.render import render_sections
+
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = ROOT / "cv" / "template"
@@ -34,34 +37,61 @@ def _new_application_dir(company: str, role: str) -> Path:
     return folder
 
 
-def write_cv(cv: dict, offer: dict) -> Path:
+def write_sections(folder: Path, doc: dict) -> None:
+    """Écrit les six fichiers sections/*.tex du CV à partir de son contenu structuré (cv.json)."""
+
+    for name, content in render_sections(doc).items():
+        (Path(folder) / "sections" / f"{name}.tex").write_text(content.strip() + "\n", encoding="utf-8")
+
+
+def write_cv(doc: dict, offer: dict, verification_issues: list | None = None) -> Path:
     """
-    Crée cv/applications/<company>-<role>/ depuis le template, y écrit les sections
-    générées et renvoie le chemin du .tex principal.
+    Crée cv/applications/<company>-<role>/ depuis le template, y écrit le CV structuré
+    (cv.json), les sections LaTeX calculées à partir de lui, l'offre et la sélection,
+    puis renvoie le chemin du .tex principal.
     """
 
-    folder = _new_application_dir(cv["company"], cv["role"])
+    validate_document(doc)
+    folder = _new_application_dir(doc["company"], doc["role"])
 
     shutil.copytree(TEMPLATE_DIR, folder)
 
-    first_name, last_name = cv["candidate_name"]
-    name_parts = _ascii_words(first_name) + _ascii_words(last_name) + ["Candidature"]
-    name_parts += _ascii_words(cv["company"]) + _ascii_words(cv["role"])
+    name_parts = _ascii_words(doc["header"]["name"]) + ["Candidature"]
+    name_parts += _ascii_words(doc["company"]) + _ascii_words(doc["role"])
     main_tex = folder / ("_".join(name_parts) + ".tex")
 
     (folder / TEMPLATE_MAIN).rename(main_tex)
 
-    for name, content in cv["sections"].items():
-        (folder / "sections" / f"{name}.tex").write_text(content.strip() + "\n", encoding="utf-8")
+    write_sections(folder, doc)
+    save_document(folder, doc)
 
     # Garder une trace de l'offre et des choix de Claude à côté du CV
     (folder / "offer.json").write_text(json.dumps(offer, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    keys = ["language", "selected_experience_ids", "selected_project_ids", "gaps", "verification_issues"]
-    selection = {key: cv.get(key) for key in keys}
+    experience_ids, project_ids = selected_ids(doc)
+    selection = {
+        "language": doc["language"],
+        "selected_experience_ids": experience_ids,
+        "selected_project_ids": project_ids,
+        "gaps": doc["gaps"],
+        "verification_issues": verification_issues or [],
+    }
     (folder / "selection.json").write_text(json.dumps(selection, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return main_tex
+
+
+def rebuild_cv(folder: Path, timeout: int = 180) -> tuple[Path, int]:
+    """
+    Relit cv.json, réécrit les sections LaTeX et recompile le PDF (après une modification du CV).
+    Renvoie (chemin du PDF, nombre de pages). Les CV créés avant cv.json ne sont pas concernés.
+    """
+
+    folder = Path(folder)
+    doc = load_document(folder)
+    main_tex = next(path for path in sorted(folder.glob("*.tex")))
+    write_sections(folder, doc)
+    return compile_cv(main_tex, timeout)
 
 
 def compile_cv(main_tex: Path, timeout: int = 180) -> tuple[Path, int]:

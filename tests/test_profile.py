@@ -16,6 +16,8 @@ from cv import cli
 from candidate.profile import EXAMPLE_PATH, CandidateProfile, ProfileError, load_profile, validate_profile
 from cv import generate as generate_cv_module
 from cv import verify as verify_cv_module
+from cv.document import build_document
+from cv_fixtures import fake_draft
 
 
 MINIMAL = {"personal": {"first_name": "Jane", "last_name": "Doe"}}
@@ -163,10 +165,11 @@ class LoadProfileTest(unittest.TestCase):
         self.assertEqual(profile.data["projects"], [])
 
 
-FAKE_CV = {
-    "company": "Acme", "role": "Stage", "language": "fr",
-    "selected_experience_ids": [], "selected_project_ids": [],
-    "sections": {"heading": "x"}, "gaps": [],
+# Réponse de Claude (cv/document.CLAUDE_SCHEMA) pour un profil sans expérience ni projet
+FAKE_DRAFT = {
+    "company": "Acme", "role": "Stage", "language": "fr", "summary": "Résumé.",
+    "experiences": [], "education": [], "projects": [], "skills": [], "languages": [],
+    "interests": [], "gaps": [],
 }
 
 
@@ -202,17 +205,18 @@ class PipelineIntegrationTest(unittest.TestCase):
         # Avant la validation, « projects: » vide faisait planter generate_cv après l'appel à Claude
         profile = profile_from("personal:\n  first_name: Jane\n  last_name: Doe\nexperiences:\nprojects:\napplication_rules:\n")
 
-        with mock.patch.object(generate_cv_module, "run_claude", return_value=dict(FAKE_CV)) as run_claude:
+        with mock.patch.object(generate_cv_module, "run_claude", return_value=dict(FAKE_DRAFT)) as run_claude:
             cv = generate_cv_module.generate_cv({"job_title": "Stage"}, profile)
 
         run_claude.assert_called_once()
-        self.assertEqual(cv["candidate_name"], ("Jane", "Doe"))
+        self.assertEqual(cv["header"]["name"], "Jane Doe")
+        self.assertEqual(cv["experiences"], [])
 
     def test_generator_and_verifier_send_the_same_profile_text_to_claude(self):
         text = "# commentaire conservé\npersonal:\n  first_name: Jane\n  last_name: Doe\nexperiences: []\nprojects:\n"
         profile = profile_from(text)
 
-        with mock.patch.object(generate_cv_module, "run_claude", return_value=dict(FAKE_CV)) as generate_claude, \
+        with mock.patch.object(generate_cv_module, "run_claude", return_value=dict(FAKE_DRAFT)) as generate_claude, \
              mock.patch.object(verify_cv_module, "run_claude", return_value={"issues": []}) as verify_claude:
             cv = generate_cv_module.generate_cv({"job_title": "Stage"}, profile)
             verify_cv_module.verify_cv(cv, profile)
@@ -229,9 +233,9 @@ class PipelineIntegrationTest(unittest.TestCase):
         with mock.patch.object(cli, "load_profile", return_value=profile) as load, \
              mock.patch.object(cli, "read_job", return_value={"url": "u", "title": "t", "text": "offre"}), \
              mock.patch.object(cli, "analyze_job", return_value={"job_title": "Stage", "company": "Acme"}), \
-             mock.patch.object(cli, "generate_cv", return_value={**FAKE_CV, "candidate_name": ("John", "Doe")}) as generate, \
+             mock.patch.object(cli, "generate_cv", return_value=build_document(fake_draft(), profile)) as generate, \
              mock.patch.object(cli, "verify_cv", side_effect=[issues, []]) as verify, \
-             mock.patch.object(cli, "write_cv", return_value=Path("cv/applications/x/x.tex")), \
+             mock.patch.object(cli, "write_cv", return_value=Path("cv/applications/x/x.tex")) as write, \
              mock.patch.object(cli, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
              mock.patch("builtins.print"):
             cli.main("https://example.com/job")
@@ -244,6 +248,39 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertIs(call.args[1], profile)
         for call in verify.call_args_list:
             self.assertIs(call.args[1], profile)
+        # La correction reçoit le CV précédent et ses problèmes ; il ne reste aucun problème à l'écriture
+        self.assertEqual(generate.call_args_list[1].kwargs["issues"], issues)
+        self.assertEqual(write.call_args.kwargs["verification_issues"], [])
+
+    def test_generator_sends_structured_request_without_latex(self):
+        profile = load_profile(EXAMPLE_PATH)
+        with mock.patch.object(generate_cv_module, "run_claude", return_value=fake_draft()) as claude:
+            doc = generate_cv_module.generate_cv({"job_title": "Stage"}, profile)
+        prompt, stdin, schema = claude.call_args.args[:3]
+        self.assertIs(schema, generate_cv_module.CLAUDE_SCHEMA)
+        self.assertNotIn("=== TEMPLATE ===", stdin)
+        self.assertIn("=== EDUCATION KEYS ===\nexample-engineering-school: Example Engineering School", stdin)
+        self.assertNotIn("\\resumeItemPlain", prompt)
+        self.assertIn("Never add a VERIFIABLE fact that is not in the profile", prompt)   # règles inchangées
+        self.assertEqual(doc["experiences"][0]["dates"], "2026")
+
+        issues = [{"section": "experience", "cv_text": "x", "problem": "y"}]
+        with mock.patch.object(generate_cv_module, "run_claude", return_value=fake_draft()) as claude:
+            generate_cv_module.generate_cv({"job_title": "Stage"}, profile, previous_cv=doc, issues=issues)
+        prompt, stdin = claude.call_args.args[:2]
+        self.assertIn("=== CORRECTION ===", prompt)
+        self.assertIn('"unsupported_statements"', stdin)
+        self.assertIn('"source_id": "example-research-company"', stdin)
+
+    def test_verifier_reads_the_cv_content_not_latex(self):
+        profile = load_profile(EXAMPLE_PATH)
+        doc = build_document(fake_draft(), profile)
+        with mock.patch.object(verify_cv_module, "run_claude", return_value={"issues": []}) as claude:
+            self.assertEqual(verify_cv_module.verify_cv(doc, profile), [])
+        prompt, stdin = claude.call_args.args[:2]
+        self.assertIn("--- SECTION: experience ---\nStagiaire Vision par Ordinateur", stdin)
+        self.assertNotIn("\\textbf", stdin)
+        self.assertIn("the content of each section", prompt)
 
 
 if __name__ == "__main__":

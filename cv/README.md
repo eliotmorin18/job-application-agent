@@ -10,9 +10,11 @@ cette page détaille le template et la compilation.
 ```
 cv/
 ├── cli.py                 # point d'entrée : python -m cv.cli "<URL>" (offre → CV PDF)
-├── generate.py            # Claude choisit les éléments du profil et rédige les sections
-├── verify.py              # Claude vérifie le CV contre le profil
-├── build_cv.py            # écrit les sections générées + compile (appelé par cli.py)
+├── generate.py            # Claude choisit les éléments du profil et rédige le contenu (JSON)
+├── verify.py              # Claude vérifie le contenu du CV contre le profil
+├── document.py            # CV structuré (cv.json) : schéma, construction, validation, sauvegarde
+├── render.py              # cv.json -> les six sections LaTeX du template
+├── build_cv.py            # écrit le dossier du CV + compile (appelé par cli.py)
 ├── template/              # squelette LaTeX générique (versionné sur git)
 │   ├── main.tex                      # préambule, packages, macros, assemblage
 │   └── sections/
@@ -26,6 +28,7 @@ cv/
 └── applications/           # un sous-dossier par CV généré — PAS VERSIONNÉ (données perso)
     └── <company>-<role>/
         ├── <Prénom>_<Nom>_Candidature_<Company>_<Role>.tex
+        ├── cv.json           # contenu du CV : la référence (sections/*.tex en sont calculées)
         ├── sections/*.tex
         ├── build/            # généré par latexmk (dont le PDF)
         ├── offer.json        # offre analysée
@@ -33,8 +36,28 @@ cv/
 ```
 
 `build_cv.py` copie `template/` dans `applications/<company>-<role>/`
-(avec un suffixe `-2`, `-3`… si le dossier existe déjà), renomme `main.tex`
-et remplace les fichiers de `sections/` par ceux générés par Claude.
+(avec un suffixe `-2`, `-3`… si le dossier existe déjà), renomme `main.tex`,
+enregistre `cv.json` et remplace les fichiers de `sections/` par ceux calculés
+à partir de `cv.json` par `render.py`.
+
+## Du JSON au LaTeX
+
+Claude ne produit plus de LaTeX : il renvoie le contenu du CV (résumé, éléments
+choisis avec leur `source_id`, puces, compétences, langues, centres d'intérêt).
+`document.py` y ajoute ce qui vient du profil — nom, contacts, dates (années :
+« 2024–2025 »), lieux courts (« Paris ») et liens GitHub — enregistré comme
+instantané dans `cv.json`. Les formations sans `id` dans le profil reçoivent un
+identifiant calculé à partir de l'école (le même que donnerait
+`manager.assign_missing_ids()`), sans modifier le profil.
+
+`render.py` convertit `cv.json` avec les macros du template et écrit les titres
+de section dans la langue du CV. Tout le texte est échappé (`& % $ # _ { } ~ ^ \
+< > |`, « » → “ ”, € → EUR) ; la seule mise en forme permise est `**gras**`.
+Une liste vide masque la section dans le PDF.
+
+Pour modifier un CV : changer `cv.json` (ajouter, retirer, réordonner des
+éléments ou des puces), puis `build_cv.rebuild_cv(<dossier>)` réécrit les
+sections et recompile. Les CV créés avant `cv.json` ne sont pas concernés.
 
 Le nom du fichier `.tex` pilote le nom du PDF compilé (latexmk compile
 `<nom>.tex` en `<nom>.pdf`) : `<Prénom>_<Nom>_Candidature_<Entreprise>_<Poste>.tex`
@@ -52,8 +75,11 @@ Classe `article`, mise en page compacte façon "one-page resume" :
 (`\resumeItem`, `\resumeItemPlain`, `\resumeItemListStart/End`...) définies
 dans `template/main.tex`. Pas de photo (CV professionnel international).
 
+Les fichiers `sections/*.tex` du template ne sont plus envoyés à Claude : ils
+restent des exemples de la mise en page reproduite par `render.py`.
+
 Les fichiers `.tex` de `cv/reference/` (sous-dossiers compris) sont envoyés à
-Claude comme exemples de style et de mise en page uniquement, jamais comme
+Claude comme exemples de style et de ton uniquement, jamais comme
 source d'informations sur le candidat. Sans ce dossier, le CV est généré à
 partir du template seul.
 

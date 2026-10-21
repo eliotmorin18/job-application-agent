@@ -28,10 +28,13 @@ What works today:
 Job offer URL
   → read the page                    jobs/read_job.py      (Playwright)
   → analyze the offer                jobs/analyze_job.py   (Claude)
-  → pick and write the CV content    cv/generate.py        (Claude + your profile + LaTeX template)
+  → pick and write the CV content    cv/generate.py        (Claude → structured JSON, facts added from your profile)
   → fact-check against your profile  cv/verify.py          (Claude, up to 2 rewrites)
-  → build and compile the PDF        cv/build_cv.py        (latexmk)
+  → convert to LaTeX                 cv/render.py          (Python, with the LaTeX template)
+  → save and compile the PDF         cv/build_cv.py        (cv.json + latexmk)
 ```
+
+Claude never writes LaTeX: it returns the CV content as JSON (`cv/document.py`). Dates, places, contact details and links are taken from your profile, and Python turns the content into the LaTeX sections of the template. Each generated CV keeps its content in `cv.json`, which will be used to edit it later.
 
 `cv/cli.py` runs the whole pipeline. Claude is called through the Claude Code CLI (`llm/claude_cli.py`, `claude -p`), with a JSON schema that forces structured answers.
 
@@ -157,9 +160,11 @@ job-application-agent/
 │   └── analyze_job.py          # job offer → structured JSON (Claude)
 ├── cv/
 │   ├── cli.py                  # command-line entry point: URL → CV PDF (python -m cv.cli)
-│   ├── generate.py             # selects profile items and writes the CV sections (Claude)
+│   ├── generate.py             # selects profile items and writes the CV content (Claude)
 │   ├── verify.py               # checks the CV against the profile (Claude)
-│   ├── build_cv.py             # writes the LaTeX files and compiles the PDF
+│   ├── document.py             # structured CV (cv.json): schema, validation, save/load
+│   ├── render.py               # cv.json → LaTeX sections (escaping, **bold**, layout)
+│   ├── build_cv.py             # writes the CV folder and compiles the PDF
 │   ├── template/               # LaTeX template (main.tex + sections/)
 │   ├── reference/              # optional style references (local, ignored by Git)
 │   └── applications/           # generated CVs (local, ignored by Git)

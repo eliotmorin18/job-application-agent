@@ -1,13 +1,14 @@
 from typing import Any
 
 from candidate.profile import CandidateProfile
+from cv.document import document_text
 from llm.claude_cli import run_claude
 
 
 VERIFY_PROMPT = """
 You are a strict fact-checker for a CV. Provided on stdin:
 - CANDIDATE PROFILE: candidate.yaml, the ONLY source of truth about the candidate
-- CV: the LaTeX source of each section of a CV written for this candidate
+- CV: the content of each section of a CV written for this candidate
 
 Check EVERY statement of the CV (each bullet, the profile summary, titles, dates, places,
 degrees, skills, languages, interests, links) against CANDIDATE PROFILE.
@@ -28,7 +29,7 @@ motivation or general personal quality (e.g. "intéressé par la planification",
 a skill, experience or result the profile does not have. Report it only if it implies
 one (e.g. "passionné de MILP", "expert en planification").
 
-Ignore LaTeX commands, formatting and section titles. Do not report style problems.
+Ignore formatting (**bold** markers) and section titles. Do not report style problems.
 Be strict: when in doubt, report it.
 
 For each unsupported statement return:
@@ -71,7 +72,7 @@ def verify_cv(cv: dict, profile: CandidateProfile, timeout: int = 300) -> list[d
     candidate_text = profile.text
 
     sections = "\n\n".join(
-        f"--- SECTION: {name} ---\n{content}" for name, content in cv["sections"].items()
+        f"--- SECTION: {name} ---\n{content}" for name, content in document_text(cv).items()
     )
 
     stdin_text = "=== CANDIDATE PROFILE ===\n" + candidate_text + "\n\n=== CV ===\n" + sections

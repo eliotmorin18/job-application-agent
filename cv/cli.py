@@ -2,6 +2,7 @@ import sys
 
 from candidate.profile import ProfileError, load_profile
 from cv.build_cv import compile_cv, write_cv
+from cv.document import selected_ids
 from cv.generate import generate_cv
 from cv.verify import verify_cv
 from jobs.analyze_job import analyze_job
@@ -52,19 +53,18 @@ def main(url: str) -> None:
         cv = generate_cv(offer, profile, previous_cv=cv, issues=issues)
         issues = verify_cv(cv, profile)
 
-    cv["verification_issues"] = issues
-
     if not issues:
         print("    OK : tout ce qui est dans le CV vient de ton profil.")
 
-    main_tex = write_cv(cv, offer)
+    main_tex = write_cv(cv, offer, verification_issues=issues)
 
     print("5/5 Compilation LaTeX...")
     pdf, pages = compile_cv(main_tex)
 
     print()
-    print(f"Expériences choisies : {', '.join(cv['selected_experience_ids'])}")
-    print(f"Projets choisis      : {', '.join(cv['selected_project_ids'])}")
+    experience_ids, project_ids = selected_ids(cv)
+    print(f"Expériences choisies : {', '.join(experience_ids)}")
+    print(f"Projets choisis      : {', '.join(project_ids)}")
 
     if cv["gaps"]:
         print("Points de l'offre non couverts par ton profil :")
