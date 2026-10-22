@@ -10,7 +10,7 @@
 <!-- LOVABLE:END -->
 
 ## Architecture rules
-- UI components read/write candidate data only through `src/services/api/candidateApi.ts` (implements `CandidateApi`); swap the mock for an HTTP client to connect FastAPI without touching the UI.
+- UI components read/write candidate data only through `src/services/api/candidateApi.ts` (implements `CandidateApi`): the FastAPI HTTP client by default, the in-memory mock only with `VITE_API_MODE=mock`.
 - Candidate data keys stay snake_case to match the Python backend contract in `src/services/api/types.ts`.
 - Items without an `id` (legacy education) are addressed as `index-N` via `getItemKey`, so ids stay backend-owned.
 - Routing uses TanStack Router (fixed by the platform), not React Router; candidate tabs live in the `?tab=` search param.

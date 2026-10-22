@@ -9,16 +9,7 @@ cette page détaille le template et la compilation.
 
 ```
 cv/
-├── cli.py                 # point d'entrée : python -m cv.cli "<URL>" (offre → CV PDF)
-├── pipeline.py            # le pipeline complet, utilisé par la CLI et par l'API (api/cvs.py)
-├── analysis.py            # analyse de correspondance offre / profil (analysis.json)
-├── fit_score.py           # score d'adéquation, calculé en Python
-├── generate.py            # Claude choisit les éléments du profil et rédige le contenu (JSON)
-├── verify.py              # Claude vérifie le contenu du CV contre le profil
-├── document.py            # CV structuré (cv.json) : schéma, construction, validation, sauvegarde
-├── render.py              # cv.json -> les six sections LaTeX du template
-├── layout.py              # zones cliquables du PDF (build/layout.json)
-├── build_cv.py            # écrit le dossier du CV + compile (appelé par cli.py)
+├── *.py                   # modules Python : voir « Project structure » dans le README principal
 ├── template/              # squelette LaTeX générique (versionné sur git)
 │   ├── main.tex                      # préambule, packages, macros, assemblage
 │   └── sections/
@@ -37,7 +28,8 @@ cv/
         ├── build/            # généré par latexmk (dont le PDF et layout.json)
         ├── offer.json        # offre analysée
         ├── selection.json    # choix de Claude + vérification
-        └── analysis.json     # analyse de correspondance offre / profil (si faite)
+        ├── analysis.json     # analyse de correspondance offre / profil (si faite)
+        └── metadata.json     # dates de création et de modification (CV créés après son ajout)
 ```
 
 `build_cv.py` copie `template/` dans `applications/<company>-<role>/`
@@ -60,9 +52,9 @@ de section dans la langue du CV. Tout le texte est échappé (`& % $ # _ { } ~ ^
 < > |`, « » → “ ”, € → EUR) ; la seule mise en forme permise est `**gras**`.
 Une liste vide masque la section dans le PDF.
 
-Pour modifier un CV : changer `cv.json` (ajouter, retirer, réordonner des
-éléments ou des puces), puis `build_cv.rebuild_cv(<dossier>)` réécrit les
-sections et recompile. Les CV créés avant `cv.json` ne sont pas concernés.
+Pour modifier un CV : l'éditeur « Mes CV » (`PUT /api/cvs/{cv_id}`) enregistre le
+`cv.json` modifié, puis `build_cv.rebuild_cv(<dossier>)` réécrit les sections et
+recompile. Les CV créés avant `cv.json` ne sont pas modifiables.
 
 Le nom du fichier `.tex` pilote le nom du PDF compilé (latexmk compile
 `<nom>.tex` en `<nom>.pdf`) : `<Prénom>_<Nom>_Candidature_<Entreprise>_<Poste>.tex`
@@ -73,7 +65,7 @@ viennent de `personal.first_name` / `personal.last_name` du profil.
 contient des données personnelles reste strictement local. Seul
 `cv/template/` (aucune donnée perso) est versionné.
 
-## Zones cliquables (futur éditeur)
+## Zones cliquables (éditeur « Mes CV »)
 
 Des marqueurs invisibles `\cvanchor{clé}` (définis dans `template/main.tex`, placés par
 `render.py` dans le nom, les titres de section et l'en-tête de chaque élément) notent leur
@@ -118,7 +110,8 @@ Pour un CV créé avant cette fonctionnalité, l'analyse se demande à la main
   si elle est justifiée, mais l'élément doit exister : sinon la preuve est retirée, et une
   exigence couverte sans preuve valide devient « non documentée ».
 - **Points forts, points faibles et recommandations** (CV, entretien, notions à approfondir,
-  obstacles).
+  obstacles), et **questions d'entretien possibles** (`interview_questions`, même appel à
+  Claude, preuves vérifiées ; absentes des analyses enregistrées avant leur ajout).
 
 **Score** (`fit_score.py`, déterministe) : crédit 1 (couverte), 0,5 (partielle), 0 (non
 documentée ou non remplie) ; poids 2 pour une exigence liée à un point clé de l'offre, sinon 1
@@ -126,7 +119,7 @@ documentée ou non remplie) ; poids 2 pour une exigence liée à un point clé d
 score = 100 × (0,80 × indispensables + 0,20 × appréciées). Pas de plafond : une exigence
 indispensable non remplie donne un avertissement. Le score vaut `null` si l'offre donne trop
 peu d'exigences (moins de 3, ou aucune indispensable). C'est une estimation de l'adéquation
-aux critères de l'annonce, pas une probabilité d'être recruté.
+aux critères de l'annonce, pas une probabilité d'être recruté. Il n'est pas affiché dans l'interface.
 
 ## Style
 

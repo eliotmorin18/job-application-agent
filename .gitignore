@@ -42,3 +42,6 @@ build/
 
 # Session du navigateur de l agent (cookies, connexions)
 browser/session/
+
+# Réglages locaux de Claude Code (plugins installés pour ce projet seulement)
+.claude/settings.local.json
