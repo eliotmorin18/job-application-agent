@@ -1,6 +1,7 @@
 """
 Routes « Mes CV » : génération à partir de l'URL d'une offre (tâche en arrière-plan),
-liste, lecture, PDF, zones cliquables et modification d'un CV.
+liste, lecture, PDF, zones cliquables, modification d'un CV et analyse de correspondance
+offre / profil (analysis.json : lue telle quelle, relancée seulement sur demande).
 
 Un CV est désigné par le nom de son dossier dans cv/applications/ (ex. « acme-stage-ia »),
 vérifié strictement : aucun chemin fourni par le frontend n'est utilisé tel quel.
@@ -25,6 +26,7 @@ from fastapi.responses import FileResponse
 from api.common import ApiError, profile_path
 from candidate.profile import ProfileError, load_profile
 from cv import build_cv
+from cv.analysis import analyze_folder, load_analysis
 from cv.build_cv import ROOT, _count_pages, rebuild_cv
 from cv.document import DOCUMENT_FILE, CVDocumentError, load_document, save_document, validate_document
 from cv.layout import LAYOUT_FILE
@@ -57,6 +59,11 @@ def cv_rebuilder():
 
 def url_checker():
     return check_public_url
+
+
+def cv_analyzer():
+    """L'analyse de correspondance (cv/analysis.py) ; remplacée par un faux dans les tests (pas de Claude)."""
+    return analyze_folder
 
 
 # ---------- Messages d'erreur lisibles et sans chemin du serveur ----------
@@ -95,10 +102,11 @@ class TaskStore:
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cv-generation")
 
-    def create(self, url: str) -> dict:
+    def create(self, url: str | None, kind: str = "generation", cv_id: str | None = None) -> dict:
         now = time.time()
-        task = {"task_id": uuid.uuid4().hex, "status": "pending", "step": "pending", "step_label": "En attente",
-                "url": url, "cv_id": None, "error": None, "result": None, "created_at": now, "updated_at": now}
+        task = {"task_id": uuid.uuid4().hex, "kind": kind, "status": "pending", "step": "pending",
+                "step_label": "En attente", "url": url, "cv_id": cv_id, "error": None, "result": None,
+                "created_at": now, "updated_at": now}
         with self._lock:
             self._tasks[task["task_id"]] = task
             for old in sorted(self._tasks.values(), key=lambda t: t["created_at"])[:-MAX_TASKS]:
@@ -109,6 +117,11 @@ class TaskStore:
     def update(self, task_id: str, **fields) -> None:
         with self._lock:
             self._tasks[task_id].update(fields, updated_at=time.time())
+
+    def analysis_in_progress(self, cv_id: str) -> bool:
+        with self._lock:
+            return any(t["kind"] == "analysis" and t["cv_id"] == cv_id and t["status"] in ("pending", "running")
+                       for t in self._tasks.values())
 
     def get(self, task_id: str) -> dict | None:
         with self._lock:
@@ -161,9 +174,12 @@ def _run_generation(task_id: str, url: str, profile, generator, folder: Path) ->
     except Exception as error:                      # l'erreur est rendue lisible, jamais affichée telle quelle
         TASKS.update(task_id, status="failed", error=_error_detail(error))
     else:
+        analysis = result.analysis or {}
         TASKS.update(task_id, status="completed", step="done", step_label="Terminé", cv_id=result.folder.name,
                      result={"pages": result.pages, "fits_one_page": result.pages == 1,
-                             "verification_issues": len(result.issues), "gaps": len(result.document["gaps"])})
+                             "verification_issues": len(result.issues), "gaps": len(result.document["gaps"]),
+                             "analysis_status": analysis.get("status", "missing"),
+                             "fit_score": (analysis.get("score") or {}).get("value")})
     finally:
         for cv_id in held:
             LOCKS.release(cv_id)
@@ -210,6 +226,14 @@ def _pages(folder: Path) -> int | None:
     return None
 
 
+def _analysis_summary(folder: Path) -> dict:
+    """Statut de l'analyse (completed, failed, missing, running) et score, sans jamais la lancer."""
+    analysis = load_analysis(folder)
+    status = "running" if TASKS.analysis_in_progress(folder.name) else (analysis or {}).get("status", "missing")
+    score = (analysis or {}).get("score") or {}
+    return {"analysis_status": status, "fit_score": score.get("value"), "fit_level": score.get("level")}
+
+
 def _summary(folder: Path) -> dict:
     """Métadonnées d'un CV, pour la liste et l'en-tête de l'éditeur."""
     doc = _read_json(folder / DOCUMENT_FILE)
@@ -233,6 +257,7 @@ def _summary(folder: Path) -> dict:
         "pages": pages,
         "fits_one_page": pages == 1 if pages else None,
         "verification_issues": len(selection.get("verification_issues") or []),
+        **_analysis_summary(folder),
         "created_at": getattr(stat, "st_birthtime", stat.st_ctime),
         "updated_at": max(stamps) if stamps else stat.st_mtime,
     }
@@ -353,3 +378,52 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
     finally:
         LOCKS.release(cv_id)
         shutil.rmtree(backup, ignore_errors=True)
+
+
+# ---------- Analyse de correspondance offre / profil ----------
+
+def _run_analysis(task_id: str, folder: Path, profile, analyzer) -> None:
+    TASKS.update(task_id, status="running", step="analyze_fit", step_label=STEPS["analyze_fit"])
+    try:
+        analysis = analyzer(folder, profile)
+    except Exception as error:                      # analyse non enregistrée : l'ancienne reste en place
+        TASKS.update(task_id, status="failed", error=_error_detail(error))
+    else:
+        score = analysis.get("score") or {}
+        TASKS.update(task_id, status="completed", step="done", step_label="Terminé",
+                     result={"analysis_status": analysis.get("status"), "fit_score": score.get("value"),
+                             "fit_level": score.get("level")})
+
+
+@router.get("/{cv_id}/analysis")
+def read_analysis(cv_id: str, base: Path = Depends(applications_dir)):
+    """L'analyse enregistrée (completed ou failed). Ne lance jamais Claude : voir POST pour la générer."""
+    folder = _cv_folder(cv_id, base)
+    analysis = load_analysis(folder)
+    if analysis is None:
+        raise ApiError(404, "Analyse non disponible",
+                       ["aucune analyse pour ce CV : demande-la avec POST /api/cvs/{cv_id}/analysis."])
+    if analysis.get("status") == "failed":
+        error = analysis.get("error") or {}
+        analysis = {**analysis, "error": {"message": error.get("message", "L'analyse a échoué"),
+                                          "problems": [_clean(p) for p in error.get("problems") or []]}}
+    return {**analysis, "running": TASKS.analysis_in_progress(folder.name)}
+
+
+@router.post("/{cv_id}/analysis", status_code=202)
+def request_analysis(cv_id: str, path: Path = Depends(profile_path), base: Path = Depends(applications_dir),
+                     analyzer=Depends(cv_analyzer)):
+    """
+    Lance (ou relance) l'analyse de correspondance en arrière-plan, sans régénérer le CV ;
+    fonctionne aussi pour les CV créés avant cette fonctionnalité. -> {"task_id", "status"}
+    """
+    folder = _cv_folder(cv_id, base)
+    if not (folder / "offer.json").is_file():
+        raise ApiError(409, "Analyse impossible", ["l'offre de cette candidature (offer.json) n'est pas connue."])
+    if TASKS.analysis_in_progress(cv_id):
+        raise ApiError(409, "Analyse déjà en cours", ["une analyse de ce CV est déjà en cours ou en attente."])
+    profile = load_profile(path)
+    task = TASKS.create(None, kind="analysis", cv_id=cv_id)
+    TASKS.submit(_run_analysis, task["task_id"], folder, profile, analyzer)
+    return {"task_id": task["task_id"], "status": task["status"]}
+

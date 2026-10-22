@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from api import cvs, main
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, load_profile
+from cv.analysis import failed_analysis, load_analysis, save_analysis
 from cv.build_cv import ROOT, rebuild_cv, write_cv
 from cv.document import build_document, entry_from_profile
 from cv.pipeline import GenerationResult
@@ -100,6 +101,7 @@ class ApiCvTestCase(unittest.TestCase):
         self.profile = load_profile(self.profile_path)
         self.generator_calls = []
         self.rebuilds = []
+        self.analyses = []
 
         overrides = main.app.dependency_overrides
         overrides[main.profile_path] = lambda: self.profile_path
@@ -107,6 +109,7 @@ class ApiCvTestCase(unittest.TestCase):
         overrides[cvs.url_checker] = lambda: check
         overrides[cvs.cv_generator] = lambda: self.fake_generator
         overrides[cvs.cv_rebuilder] = lambda: self.fake_rebuilder
+        overrides[cvs.cv_analyzer] = lambda: self.fake_analyzer
         self.addCleanup(overrides.clear)
         self.client = TestClient(main.app)
 
@@ -120,8 +123,20 @@ class ApiCvTestCase(unittest.TestCase):
                             applications_dir=applications_dir)
         on_step("compile", folder=main_tex.parent)
         pdf, pages = self.fake_compile(main_tex.parent)
+        on_step("analyze_fit", folder=main_tex.parent)
+        analysis = self.fake_analyzer(main_tex.parent, profile)
         return GenerationResult(folder=main_tex.parent, main_tex=main_tex, pdf=pdf, pages=pages,
-                                document=doc, issues=[], offer={})
+                                document=doc, issues=[], offer={}, analysis=analysis)
+
+    def fake_analyzer(self, folder, profile):
+        """Analyse fictive enregistrée comme la vraie (cv/analysis.analyze_folder), sans Claude."""
+        self.analyses.append(Path(folder).name)
+        analysis = {"schema_version": 1, "status": "completed", "generated_at": "2026-10-22T10:00:00",
+                    "profile_fingerprint": "0" * 16, "offer": {"company": "Acme Robotics"},
+                    "overview": {}, "requirements": [], "strengths": [], "weaknesses": [], "recommendations": [],
+                    "score": {"value": 72, "level": "Bonne adéquation"}, "warnings": []}
+        save_analysis(folder, analysis)
+        return analysis
 
     def fake_compile(self, folder, pages=1):
         main_tex = next(folder.glob("*.tex"))
@@ -170,7 +185,8 @@ class GenerationTest(ApiCvTestCase):
         task = wait_for(self.client, task_id)
         self.assertEqual(task["status"], "completed", task)
         self.assertEqual((task["step"], task["error"]), ("done", None))
-        self.assertEqual(task["result"], {"pages": 1, "fits_one_page": True, "verification_issues": 0, "gaps": 1})
+        self.assertEqual(task["result"], {"pages": 1, "fits_one_page": True, "verification_issues": 0, "gaps": 1,
+                                          "analysis_status": "completed", "fit_score": 72})
         self.assertEqual(self.generator_calls, ["https://jobs.example.com/offre/42"])
         cv = self.client.get(f"/api/cvs/{task['cv_id']}").json()
         self.assertEqual(cv["document"]["header"]["name"], "John Doe")
@@ -384,6 +400,90 @@ class UpdateTest(ApiCvTestCase):
         self.assertTrue(self.client.get(f"/api/cvs/{self.cv_id}/pdf").content.startswith(b"%PDF"))
         regions = self.client.get(f"/api/cvs/{self.cv_id}/layout").json()["regions"]
         self.assertIn("experiences/0", [r["key"] for r in regions])
+
+
+class AnalysisRoutesTest(ApiCvTestCase):
+
+    def test_saved_analysis_is_read_without_calling_claude(self):
+        cv_id = self.new_cv()
+        self.analyses.clear()
+        analysis = self.client.get(f"/api/cvs/{cv_id}/analysis").json()
+        self.assertEqual((analysis["status"], analysis["score"]["value"], analysis["running"]), ("completed", 72, False))
+        summary = self.client.get("/api/cvs").json()[0]
+        self.assertEqual((summary["analysis_status"], summary["fit_score"], summary["fit_level"]),
+                         ("completed", 72, "Bonne adéquation"))
+        self.assertEqual(self.client.get(f"/api/cvs/{cv_id}").json()["cv"]["analysis_status"], "completed")
+        self.assertEqual(self.analyses, [])                                           # lecture seule : pas d'analyse
+
+    def test_older_cv_gets_its_analysis_on_demand_without_regeneration(self):
+        legacy = self.legacy_cv()
+        folder = self.applications / legacy
+        before = {p.name: sha(p) for p in folder.rglob("*") if p.is_file()}
+        self.assertProblem(self.client.get(f"/api/cvs/{legacy}/analysis"), 404, "Analyse non disponible")
+        self.assertEqual(self.client.get("/api/cvs").json()[0]["analysis_status"], "missing")
+        self.assertEqual(self.analyses, [])
+
+        task_id = self.client.post(f"/api/cvs/{legacy}/analysis").json()["task_id"]
+        task = wait_for(self.client, task_id)
+        self.assertEqual((task["status"], task["kind"], task["cv_id"]), ("completed", "analysis", legacy))
+        self.assertEqual(task["result"]["fit_score"], 72)
+        self.assertEqual(self.client.get(f"/api/cvs/{legacy}/analysis").json()["status"], "completed")
+        self.assertEqual(self.generator_calls, [])                                    # le CV n'est pas régénéré
+        after = {p.name: sha(p) for p in folder.rglob("*") if p.is_file() and p.name != "analysis.json"}
+        self.assertEqual(after, before)
+
+    def test_analysis_requests_are_refused_when_impossible(self):
+        cv_id = self.new_cv()
+        (self.applications / cv_id / "offer.json").unlink()
+        self.assertProblem(self.client.post(f"/api/cvs/{cv_id}/analysis"), 409, "offer.json")
+        self.assertProblem(self.client.post("/api/cvs/inexistant/analysis"), 404, "CV introuvable")
+        self.assertEqual(self.client.post("/api/cvs/..%2F..%2Fprofile/analysis").status_code, 404)
+
+    def test_one_analysis_at_a_time_per_cv_and_running_status(self):
+        cv_id = self.new_cv()
+        started, release = threading.Event(), threading.Event()
+
+        def slow(folder, profile):
+            started.set()
+            release.wait(5)
+            return self.fake_analyzer(folder, profile)
+
+        main.app.dependency_overrides[cvs.cv_analyzer] = lambda: slow
+        first = self.client.post(f"/api/cvs/{cv_id}/analysis").json()["task_id"]
+        self.assertTrue(started.wait(5))
+        self.assertProblem(self.client.post(f"/api/cvs/{cv_id}/analysis"), 409, "déjà en cours")
+        self.assertEqual(self.client.get("/api/cvs").json()[0]["analysis_status"], "running")
+        self.assertTrue(self.client.get(f"/api/cvs/{cv_id}/analysis").json()["running"])
+        release.set()
+        self.assertEqual(wait_for(self.client, first)["status"], "completed")
+
+    def test_failed_analysis_is_reported_without_server_details(self):
+        cv_id = self.new_cv()
+        save_analysis(self.applications / cv_id, failed_analysis(
+            "L'analyse de correspondance a échoué", [f"Claude a échoué dans {ROOT}/llm et {Path.home()}/x"]))
+        analysis = self.client.get(f"/api/cvs/{cv_id}/analysis").json()
+        self.assertEqual(analysis["status"], "failed")
+        self.assertNotIn(str(ROOT), json.dumps(analysis))
+        self.assertNotIn(str(Path.home()), json.dumps(analysis))
+        self.assertEqual(self.client.get("/api/cvs").json()[0]["analysis_status"], "failed")
+
+        def broken(folder, profile):
+            raise RuntimeError(f"Claude n'a pas répondu ({ROOT}/x).")
+        main.app.dependency_overrides[cvs.cv_analyzer] = lambda: broken
+        task = wait_for(self.client, self.client.post(f"/api/cvs/{cv_id}/analysis").json()["task_id"])
+        self.assertEqual(task["status"], "failed")
+        self.assertNotIn(str(ROOT), json.dumps(task))
+        self.assertEqual(load_analysis(self.applications / cv_id)["status"], "failed")  # l'ancienne reste en place
+
+    def test_generation_keeps_the_cv_when_the_analysis_fails(self):
+        # Le pipeline enregistre une analyse en échec (cv/pipeline.py) : le CV reste disponible
+        self.fake_analyzer = lambda folder, profile: failed_analysis("L'analyse de correspondance a échoué",
+                                                                     ["Claude n'a pas répondu."])
+        task = wait_for(self.client, self.client.post("/api/cvs/generate", json={"url": "https://jobs.example.com/1"})
+                        .json()["task_id"])
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["result"]["analysis_status"], "failed")
+        self.assertEqual(self.client.get(f"/api/cvs/{task['cv_id']}/pdf").status_code, 200)
 
 
 class CompatibilityTest(ApiCvTestCase):

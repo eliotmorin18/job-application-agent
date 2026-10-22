@@ -32,6 +32,7 @@ Job offer URL
   → fact-check against your profile  cv/verify.py          (Claude, up to 2 rewrites)
   → convert to LaTeX                 cv/render.py          (Python, with the LaTeX template)
   → save and compile the PDF         cv/build_cv.py        (cv.json + latexmk)
+  → analyse the match with the offer cv/analysis.py        (Claude; score computed in Python: cv/fit_score.py)
 ```
 
 Claude never writes LaTeX: it returns the CV content as JSON (`cv/document.py`). Dates, places, contact details and links are taken from your profile, and Python turns the content into the LaTeX sections of the template. Each generated CV keeps its content in `cv.json`, which will be used to edit it later.
@@ -138,6 +139,8 @@ The backend also exposes the "My CVs" routes (not used by the interface yet):
 | `GET /api/cvs/{cv_id}` | `{"cv": metadata, "document": cv.json, "verification_issues"}` |
 | `GET /api/cvs/{cv_id}/pdf`, `/layout` | the PDF and its clickable zones (`layout.json`) |
 | `PUT /api/cvs/{cv_id}` | saves an edited `cv.json` and recompiles; the previous version is kept if compilation fails |
+| `GET /api/cvs/{cv_id}/analysis` | the saved offer/profile match analysis (`analysis.json`); never calls Claude |
+| `POST /api/cvs/{cv_id}/analysis` | runs (or reruns) the analysis in the background, also for older CVs → `{"task_id"}` (202) |
 
 Generations run one at a time in a background thread; their status is kept in memory (lost when the server restarts, the CVs are not). Offer URLs must be public web pages: local and internal addresses are refused.
 
@@ -180,6 +183,8 @@ job-application-agent/
 ├── cv/
 │   ├── cli.py                  # command-line entry point: URL → CV PDF (python -m cv.cli)
 │   ├── pipeline.py             # the generation pipeline, shared by the CLI and the API
+│   ├── analysis.py             # offer/profile match analysis (analysis.json, one Claude call)
+│   ├── fit_score.py            # deterministic match score (0-100) and its explanation
 │   ├── generate.py             # selects profile items and writes the CV content (Claude)
 │   ├── verify.py               # checks the CV against the profile (Claude)
 │   ├── document.py             # structured CV (cv.json): schema, validation, save/load

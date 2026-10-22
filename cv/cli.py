@@ -14,15 +14,15 @@ def _print_step(step: str, **details) -> None:
     """Affichage de chaque étape du pipeline (cv/pipeline.py), comme avant."""
 
     if step == "read_offer":
-        print("1/5 Lecture de l'offre...")
+        print("1/6 Lecture de l'offre...")
     elif step == "analyze_offer":
-        print("2/5 Analyse de l'offre par Claude...")
+        print("2/6 Analyse de l'offre par Claude...")
     elif step == "offer_analyzed":
         print(f"    {details['offer']['job_title']} — {details['offer']['company']}")
     elif step == "write_cv":
-        print("3/5 Rédaction du CV par Claude...")
+        print("3/6 Rédaction du CV par Claude...")
     elif step == "verify_cv":
-        print("4/5 Vérification du CV contre candidate.yaml...")
+        print("4/6 Vérification du CV contre candidate.yaml...")
     elif step == "correct_cv":
         issues = details["issues"]
         print(f"    {len(issues)} affirmation(s) absente(s) de ton profil, correction {details['attempt']}/{MAX_CORRECTIONS} :")
@@ -30,7 +30,9 @@ def _print_step(step: str, **details) -> None:
     elif step == "verified" and not details["issues"]:
         print("    OK : tout ce qui est dans le CV vient de ton profil.")
     elif step == "compile":
-        print("5/5 Compilation LaTeX...")
+        print("5/6 Compilation LaTeX...")
+    elif step == "analyze_fit":
+        print("6/6 Analyse de correspondance entre l'offre et ton profil...")
 
 
 def main(url: str) -> None:
@@ -66,6 +68,14 @@ def main(url: str) -> None:
 
     if pages > 1:
         print(f"\nAttention : le CV fait {pages} pages au lieu d'une.")
+
+    analysis = result.analysis or {}
+    if analysis.get("status") == "completed":
+        score = analysis["score"]
+        shown = f"{score['value']}/100 ({score['level']})" if score["value"] is not None else "non calculé"
+        print(f"\nAdéquation avec l'offre : {shown} — détail dans {result.folder / 'analysis.json'}")
+    else:
+        print("\nAnalyse de correspondance indisponible (le CV est bien généré).")
 
     print(f"\nCV généré : {result.pdf}")
 

@@ -1,6 +1,8 @@
 """
 Génération complète d'un CV à partir de l'URL d'une offre : lecture, analyse, rédaction,
-vérification (avec corrections), écriture du dossier et compilation du PDF.
+vérification (avec corrections), écriture du dossier, compilation du PDF, puis analyse de
+correspondance entre l'offre et le profil (analysis.json). Un échec de cette dernière analyse
+n'annule jamais le CV : il est enregistré comme une analyse en échec.
 
 Une seule implémentation, utilisée par la ligne de commande (cv/cli.py) et par l'API
 (api/cvs.py). Chaque étape est signalée par on_step(étape, **détails) : la CLI l'affiche,
@@ -11,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from candidate.profile import CandidateProfile
+from cv.analysis import analyze_folder, error_analysis, save_analysis
 from cv.build_cv import compile_cv, write_cv
 from cv.generate import generate_cv
 from cv.verify import verify_cv
@@ -31,6 +34,7 @@ STEPS = {
     "correct_cv": "Correction du CV",
     "verified": "Vérification du CV",
     "compile": "Compilation du PDF",
+    "analyze_fit": "Analyse de correspondance",
 }
 
 
@@ -43,6 +47,7 @@ class GenerationResult:
     document: dict        # contenu de cv.json
     issues: list          # affirmations encore absentes du profil après les corrections
     offer: dict
+    analysis: dict | None = None   # contenu d'analysis.json (status completed ou failed)
 
 
 def _ignore(step: str, **details) -> None:
@@ -94,5 +99,16 @@ def generate_from_url(
     notify("compile", folder=main_tex.parent)
     pdf, pages = compile_cv(main_tex)
 
+    # Le CV et son PDF sont enregistrés : une erreur d'analyse ne doit pas les faire perdre
+    notify("analyze_fit", folder=main_tex.parent)
+    try:
+        analysis = analyze_folder(main_tex.parent, profile)
+    except Exception as error:
+        analysis = error_analysis(error)
+        try:
+            save_analysis(main_tex.parent, analysis)
+        except OSError:
+            pass
+
     return GenerationResult(folder=main_tex.parent, main_tex=main_tex, pdf=pdf, pages=pages,
-                            document=cv, issues=issues, offer=offer)
+                            document=cv, issues=issues, offer=offer, analysis=analysis)

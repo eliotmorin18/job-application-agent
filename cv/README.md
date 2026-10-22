@@ -11,6 +11,8 @@ cette page détaille le template et la compilation.
 cv/
 ├── cli.py                 # point d'entrée : python -m cv.cli "<URL>" (offre → CV PDF)
 ├── pipeline.py            # le pipeline complet, utilisé par la CLI et par l'API (api/cvs.py)
+├── analysis.py            # analyse de correspondance offre / profil (analysis.json)
+├── fit_score.py           # score d'adéquation, calculé en Python
 ├── generate.py            # Claude choisit les éléments du profil et rédige le contenu (JSON)
 ├── verify.py              # Claude vérifie le contenu du CV contre le profil
 ├── document.py            # CV structuré (cv.json) : schéma, construction, validation, sauvegarde
@@ -34,7 +36,8 @@ cv/
         ├── sections/*.tex
         ├── build/            # généré par latexmk (dont le PDF et layout.json)
         ├── offer.json        # offre analysée
-        └── selection.json    # choix de Claude + vérification
+        ├── selection.json    # choix de Claude + vérification
+        └── analysis.json     # analyse de correspondance offre / profil (si faite)
 ```
 
 `build_cv.py` copie `template/` dans `applications/<company>-<role>/`
@@ -94,6 +97,36 @@ Une section vide n'a pas de zone ; une zone coupée par un saut de page donne un
 page. Un clic sur un élément l'emporte sur sa section (`layout.region_at`). L'ancien
 `layout.json` est supprimé avant chaque compilation : un échec n'en laisse jamais
 d'obsolète. Les CV créés avant les marqueurs se compilent comme avant, sans `layout.json`.
+
+## Analyse de correspondance (analysis.json)
+
+Après la compilation, le pipeline analyse la correspondance entre l'offre et le profil
+(`analysis.py`, un appel à Claude séparé de la génération, en français) et l'enregistre dans
+`analysis.json`. Un échec est enregistré comme une analyse `failed` : le CV n'est jamais perdu.
+Pour un CV créé avant cette fonctionnalité, l'analyse se demande à la main
+(`POST /api/cvs/{cv_id}/analysis`) ; ouvrir un CV ne lance jamais Claude.
+
+- **Offre** expliquée simplement : résumé, missions, technologies, tâches possibles (présentées
+  comme des exemples), glossaire des termes de l'offre.
+- **Exigences** : la liste vient d'`offer.json` (indispensables : `must_have`, formation,
+  expérience, langues ; appréciées : `nice_to_have`). Claude évalue chacune —
+  `met`, `partial`, `not_documented` (le profil n'en dit rien) ou `missing` (le profil montre
+  qu'elle n'est pas remplie) — avec ses preuves. Une exigence composée (« Python et SQL ») peut
+  être séparée si c'est sans ambiguïté, en gardant le lien avec l'exigence d'origine.
+- **Preuves** : chaque preuve cite un élément du profil (`id` d'expérience ou de projet,
+  identifiant de formation, compétence, langue) ; une correspondance sémantique est permise
+  si elle est justifiée, mais l'élément doit exister : sinon la preuve est retirée, et une
+  exigence couverte sans preuve valide devient « non documentée ».
+- **Points forts, points faibles et recommandations** (CV, entretien, notions à approfondir,
+  obstacles).
+
+**Score** (`fit_score.py`, déterministe) : crédit 1 (couverte), 0,5 (partielle), 0 (non
+documentée ou non remplie) ; poids 2 pour une exigence liée à un point clé de l'offre, sinon 1
+(une exigence séparée partage son poids, un doublon ne compte pas) ;
+score = 100 × (0,80 × indispensables + 0,20 × appréciées). Pas de plafond : une exigence
+indispensable non remplie donne un avertissement. Le score vaut `null` si l'offre donne trop
+peu d'exigences (moins de 3, ou aucune indispensable). C'est une estimation de l'adéquation
+aux critères de l'annonce, pas une probabilité d'être recruté.
 
 ## Style
 
