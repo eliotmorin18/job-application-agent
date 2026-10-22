@@ -1,7 +1,7 @@
 """
 Routes « Mes CV » : génération à partir de l'URL d'une offre (tâche en arrière-plan),
-liste, lecture, PDF, zones cliquables, modification d'un CV et analyse de correspondance
-offre / profil (analysis.json : lue telle quelle, relancée seulement sur demande).
+liste, lecture, PDF, zones cliquables, modification et suppression d'un CV, et analyse de
+correspondance offre / profil (analysis.json : lue telle quelle, relancée seulement sur demande).
 
 Un CV est désigné par le nom de son dossier dans cv/applications/ (ex. « acme-stage-ia »),
 vérifié strictement : aucun chemin fourni par le frontend n'est utilisé tel quel.
@@ -11,6 +11,7 @@ leur statut est gardé en mémoire : il est perdu si le serveur redémarre, pas 
 """
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -20,7 +21,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Response
 from fastapi.responses import FileResponse
 
 from api.common import ApiError, profile_path
@@ -123,6 +124,11 @@ class TaskStore:
             return any(t["kind"] == "analysis" and t["cv_id"] == cv_id and t["status"] in ("pending", "running")
                        for t in self._tasks.values())
 
+    def active_for(self, cv_id: str) -> bool:
+        """Une génération ou une analyse en attente ou en cours vise ce CV."""
+        with self._lock:
+            return any(t["cv_id"] == cv_id and t["status"] in ("pending", "running") for t in self._tasks.values())
+
     def get(self, task_id: str) -> dict | None:
         with self._lock:
             task = self._tasks.get(task_id)
@@ -192,10 +198,12 @@ def _cv_folder(cv_id: str, base: Path) -> Path:
     if not isinstance(cv_id, str) or not CV_ID_PATTERN.match(cv_id):
         raise ApiError(404, "CV introuvable", [f"aucun CV « {cv_id[:80]} »."])
     base = Path(base).resolve()
-    folder = (base / cv_id).resolve()
-    if folder.parent != base or not folder.is_dir() or folder.is_symlink():
+    entry = base / cv_id
+    # Le nom lui-même ne doit pas être un lien (vérifié avant de résoudre : un lien vers un autre CV
+    # désignerait ce CV), puis le dossier réel doit être directement dans cv/applications/
+    if entry.is_symlink() or not entry.is_dir() or entry.resolve().parent != base:
         raise ApiError(404, "CV introuvable", [f"aucun CV « {cv_id} »."])
-    return folder
+    return entry
 
 
 def _main_tex(folder: Path) -> Path | None:
@@ -426,4 +434,39 @@ def request_analysis(cv_id: str, path: Path = Depends(profile_path), base: Path 
     task = TASKS.create(None, kind="analysis", cv_id=cv_id)
     TASKS.submit(_run_analysis, task["task_id"], folder, profile, analyzer)
     return {"task_id": task["task_id"], "status": task["status"]}
+
+
+# ---------- Suppression d'un CV ----------
+
+@router.delete("/{cv_id}", status_code=204)
+def delete_cv(cv_id: str, base: Path = Depends(applications_dir)):
+    """
+    Supprime toute la candidature (dossier cv/applications/<cv_id>/ : cv.json, PDF, LaTeX, analyse,
+    zones, offre...). Le dossier est d'abord renommé sous un nom caché dans cv/applications/
+    (opération unique : le CV disparaît d'un coup), puis effacé ; un lien symbolique qu'il contient
+    est retiré sans toucher à sa cible. Refusé (409) si une génération, une analyse ou une
+    modification de ce CV est en cours.
+    """
+    folder = _cv_folder(cv_id, base)
+    busy = ["une génération, une analyse ou une modification de ce CV est en cours : réessaie quand elle sera terminée."]
+    if TASKS.active_for(cv_id) or not LOCKS.try_acquire(cv_id):
+        raise ApiError(409, "Suppression impossible pour le moment", busy)
+    try:
+        if TASKS.active_for(cv_id):                  # une tâche a pu commencer entre les deux vérifications
+            raise ApiError(409, "Suppression impossible pour le moment", busy)
+        trash = folder.parent / f".deleting-{cv_id}-{uuid.uuid4().hex[:8]}"
+        try:
+            os.replace(folder, trash)
+        except OSError as error:
+            raise ApiError(500, "Suppression impossible", [f"le CV n'a pas pu être supprimé ({error.strerror or 'erreur'}) ; "
+                                                           "rien n'a été effacé."])
+        try:
+            shutil.rmtree(trash)
+        except OSError as error:
+            raise ApiError(500, "Suppression incomplète",
+                           [f"le CV n'apparaît plus, mais certains de ses fichiers n'ont pas pu être effacés "
+                            f"({error.strerror or 'erreur'}) : dossier caché « {trash.name} » dans cv/applications/."])
+    finally:
+        LOCKS.release(cv_id)
+    return Response(status_code=204)
 

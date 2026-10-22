@@ -139,6 +139,7 @@ The backend also exposes the "My CVs" routes (not used by the interface yet):
 | `GET /api/cvs/{cv_id}` | `{"cv": metadata, "document": cv.json, "verification_issues"}` |
 | `GET /api/cvs/{cv_id}/pdf`, `/layout` | the PDF and its clickable zones (`layout.json`) |
 | `PUT /api/cvs/{cv_id}` | saves an edited `cv.json` and recompiles; the previous version is kept if compilation fails |
+| `DELETE /api/cvs/{cv_id}` | deletes the whole application folder (CV, PDF, analysis, offer…) → 204; 409 while a generation, analysis or edit of this CV is running |
 | `GET /api/cvs/{cv_id}/analysis` | the saved offer/profile match analysis (`analysis.json`); never calls Claude |
 | `POST /api/cvs/{cv_id}/analysis` | runs (or reruns) the analysis in the background, also for older CVs → `{"task_id"}` (202) |
 

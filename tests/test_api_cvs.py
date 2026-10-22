@@ -16,9 +16,12 @@ import unittest
 from functools import partial
 from pathlib import Path
 
+from unittest import mock
+
 from fastapi.testclient import TestClient
 
 from api import cvs, main
+from cv import build_cv
 from candidate.profile import CANDIDATE_PATH, EXAMPLE_PATH, load_profile
 from cv.analysis import failed_analysis, load_analysis, save_analysis
 from cv.build_cv import ROOT, rebuild_cv, write_cv
@@ -304,15 +307,18 @@ class ReadTest(ApiCvTestCase):
     def test_dangerous_identifiers(self):
         (self.folder / "secret.txt").write_text("secret", encoding="utf-8")
         os.symlink(self.folder, self.applications / "lien-vers-le-parent")
+        os.symlink(self.applications / self.new_cv(), self.applications / "lien-vers-un-cv")
         for cv_id in ("..", "...", "%2e%2e", "..%2F..%2Fcandidate.yaml", "Majuscules", "a_b", "x" * 200,
-                      "lien-vers-le-parent", "inexistant"):
+                      "lien-vers-le-parent", "lien-vers-un-cv", "inexistant"):
             for suffix in ("", "/pdf", "/layout"):
                 with self.subTest(cv_id=cv_id, suffix=suffix):
                     response = self.client.get(f"/api/cvs/{cv_id}{suffix}")
                     self.assertIn(response.status_code, (404, 405))
                     self.assertNotIn(b"secret", response.content)
                     self.assertNotIn(b"first_name", response.content)
-        self.assertNotIn("lien-vers-le-parent", [cv["id"] for cv in self.client.get("/api/cvs").json()])
+        listed = [cv["id"] for cv in self.client.get("/api/cvs").json()]
+        self.assertNotIn("lien-vers-le-parent", listed)
+        self.assertNotIn("lien-vers-un-cv", listed)
 
 
 class UpdateTest(ApiCvTestCase):
@@ -484,6 +490,143 @@ class AnalysisRoutesTest(ApiCvTestCase):
         self.assertEqual(task["status"], "completed")
         self.assertEqual(task["result"]["analysis_status"], "failed")
         self.assertEqual(self.client.get(f"/api/cvs/{task['cv_id']}/pdf").status_code, 200)
+
+
+class DeleteTest(ApiCvTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.cv_id = self.new_cv()
+        self.folder = self.applications / self.cv_id
+
+    def tree(self, folder: Path) -> dict:
+        return {str(p.relative_to(folder)): sha(p) for p in sorted(folder.rglob("*")) if p.is_file()}
+
+    def test_the_whole_application_is_deleted(self):
+        names = {p.name for p in self.folder.rglob("*") if p.is_file()}
+        for expected in ("cv.json", "offer.json", "selection.json", "analysis.json", "layout.json", "experience.tex"):
+            self.assertIn(expected, names)
+        response = self.client.delete(f"/api/cvs/{self.cv_id}")
+        self.assertEqual((response.status_code, response.content), (204, b""))
+        self.assertFalse(self.folder.exists())
+        self.assertEqual(list(self.applications.iterdir()), [])                       # pas de dossier caché restant
+        self.assertEqual(self.client.get("/api/cvs").json(), [])
+        for method, suffix in (("get", ""), ("get", "/pdf"), ("get", "/layout"), ("get", "/analysis"),
+                               ("post", "/analysis"), ("delete", "")):
+            with self.subTest(f"{method} {suffix}"):
+                self.assertEqual(getattr(self.client, method)(f"/api/cvs/{self.cv_id}{suffix}").status_code, 404)
+        self.assertEqual(self.client.put(f"/api/cvs/{self.cv_id}", json={}).status_code, 404)
+
+    def test_other_applications_profile_and_template_are_kept(self):
+        other = self.new_cv()
+        legacy = self.legacy_cv()
+        kept = {name: self.tree(self.applications / name) for name in (other, legacy)}
+        profile, template = sha(self.profile_path), {p.name: sha(p) for p in build_cv.TEMPLATE_DIR.rglob("*") if p.is_file()}
+        self.assertEqual(self.client.delete(f"/api/cvs/{self.cv_id}").status_code, 204)
+        self.assertEqual({name: self.tree(self.applications / name) for name in kept}, kept)
+        self.assertEqual(sha(self.profile_path), profile)
+        self.assertEqual({p.name: sha(p) for p in build_cv.TEMPLATE_DIR.rglob("*") if p.is_file()}, template)
+        self.assertEqual(sorted(cv["id"] for cv in self.client.get("/api/cvs").json()), sorted([other, legacy]))
+        self.assertEqual(self.client.delete(f"/api/cvs/{legacy}").status_code, 204)          # ancien CV aussi
+
+    def test_unknown_invalid_and_traversal_identifiers(self):
+        outside = self.folder.parent.parent / "a-garder"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret", encoding="utf-8")
+        before = self.tree(self.folder)
+        for cv_id in ("inexistant", "..", "...", "%2e%2e", "..%2F..%2Fa-garder", "..%2Fcandidate.yaml", "Majuscules",
+                      "a_b", "x" * 200, ".deleting-x", "%2Etmp", "a-garder"):
+            with self.subTest(cv_id):
+                self.assertIn(self.client.delete(f"/api/cvs/{cv_id}").status_code, (404, 405))
+        self.assertEqual(self.client.delete("/api/cvs/").status_code, 405)
+        self.assertTrue((outside / "secret.txt").exists())
+        self.assertTrue(self.profile_path.exists())
+        self.assertEqual(self.tree(self.folder), before)
+
+    def test_symbolic_links(self):
+        target = self.folder.parent.parent / "cible-externe"
+        target.mkdir()
+        (target / "important.txt").write_text("à garder", encoding="utf-8")
+        os.symlink(target, self.applications / "lien-externe")
+        os.symlink(self.folder, self.applications / "lien-vers-cv")
+        for cv_id in ("lien-externe", "lien-vers-cv"):
+            with self.subTest(cv_id):
+                self.assertEqual(self.client.delete(f"/api/cvs/{cv_id}").status_code, 404)
+        self.assertTrue((target / "important.txt").exists())
+        self.assertTrue((self.folder / "cv.json").exists())
+
+        # Un lien à l'intérieur du dossier supprimé est retiré, sa cible reste intacte
+        os.symlink(target, self.folder / "lien-interne")
+        os.symlink(target / "important.txt", self.folder / "fichier-lie.txt")
+        self.assertEqual(self.client.delete(f"/api/cvs/{self.cv_id}").status_code, 204)
+        self.assertEqual((target / "important.txt").read_text(encoding="utf-8"), "à garder")
+
+    def test_refused_while_an_edit_is_running(self):
+        cvs.LOCKS.acquire(self.cv_id)
+        try:
+            self.assertProblem(self.client.delete(f"/api/cvs/{self.cv_id}"), 409, "en cours")
+        finally:
+            cvs.LOCKS.release(self.cv_id)
+        self.assertTrue((self.folder / "cv.json").exists())
+        self.assertEqual(self.client.delete(f"/api/cvs/{self.cv_id}").status_code, 204)
+
+    def test_refused_while_an_analysis_is_running(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow(folder, profile):
+            started.set()
+            release.wait(5)
+            return self.fake_analyzer(folder, profile)
+
+        main.app.dependency_overrides[cvs.cv_analyzer] = lambda: slow
+        task_id = self.client.post(f"/api/cvs/{self.cv_id}/analysis").json()["task_id"]
+        self.assertTrue(started.wait(5))
+        self.assertProblem(self.client.delete(f"/api/cvs/{self.cv_id}"), 409, "Suppression impossible")
+        release.set()
+        self.assertEqual(wait_for(self.client, task_id)["status"], "completed")
+        self.assertEqual(self.client.delete(f"/api/cvs/{self.cv_id}").status_code, 204)
+
+    def test_refused_while_the_generation_of_this_cv_is_running(self):
+        started, release = threading.Event(), threading.Event()
+
+        def generator(url, profile, on_step=None, applications_dir=None):
+            main_tex = write_cv(build_document(fake_draft(), profile), {"job_title": "Stage"},
+                                applications_dir=applications_dir)
+            on_step("compile", folder=main_tex.parent)                 # le dossier existe, la tâche le vise
+            started.set()
+            release.wait(5)
+            pdf, pages = self.fake_compile(main_tex.parent)
+            return GenerationResult(folder=main_tex.parent, main_tex=main_tex, pdf=pdf, pages=pages,
+                                    document=build_document(fake_draft(), profile), issues=[], offer={})
+
+        main.app.dependency_overrides[cvs.cv_generator] = lambda: generator
+        task_id = self.client.post("/api/cvs/generate", json={"url": "https://jobs.example.com/2"}).json()["task_id"]
+        self.assertTrue(started.wait(5))
+        generating = self.client.get(f"/api/cvs/tasks/{task_id}").json()["cv_id"]
+        self.assertNotEqual(generating, self.cv_id)
+        self.assertProblem(self.client.delete(f"/api/cvs/{generating}"), 409, "en cours")
+        self.assertEqual(self.client.delete(f"/api/cvs/{self.cv_id}").status_code, 204)       # un autre CV : permis
+        release.set()
+        self.assertEqual(wait_for(self.client, task_id)["status"], "completed")
+        self.assertEqual(self.client.delete(f"/api/cvs/{generating}").status_code, 204)
+
+    def test_deletion_errors_are_readable_and_without_local_paths(self):
+        def refuse(source, destination):
+            raise PermissionError(13, "Permission denied", str(source))
+
+        with mock.patch.object(cvs.os, "replace", side_effect=refuse):
+            detail = self.assertProblem(self.client.delete(f"/api/cvs/{self.cv_id}"), 500, "rien n'a été effacé")
+        self.assertNotIn(str(self.applications), json.dumps(detail))
+        self.assertTrue((self.folder / "cv.json").exists())                       # rien n'a été effacé
+
+        def partial(path):
+            raise OSError(66, "Directory not empty", str(path))
+
+        with mock.patch.object(cvs.shutil, "rmtree", side_effect=partial):
+            detail = self.assertProblem(self.client.delete(f"/api/cvs/{self.cv_id}"), 500, "Suppression incomplète")
+        self.assertNotIn(str(self.applications), json.dumps(detail))
+        self.assertNotIn(self.cv_id, [cv["id"] for cv in self.client.get("/api/cvs").json()])   # n'apparaît plus
+        self.assertFalse(cvs.LOCKS._lock(self.cv_id).locked())                                  # verrou libéré
 
 
 class CompatibilityTest(ApiCvTestCase):
