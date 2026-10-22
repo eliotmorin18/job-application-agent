@@ -481,6 +481,19 @@ class AnalysisRoutesTest(ApiCvTestCase):
         self.assertNotIn(str(ROOT), json.dumps(task))
         self.assertEqual(load_analysis(self.applications / cv_id)["status"], "failed")  # l'ancienne reste en place
 
+    def test_older_analysis_without_interview_questions_is_served_unchanged(self):
+        # Analyses enregistrées avant interview_questions : lues telles quelles, jamais régénérées
+        cv_id = self.new_cv()
+        path = self.applications / cv_id / "analysis.json"
+        self.assertNotIn("interview_questions", json.loads(path.read_text(encoding="utf-8")))
+        before = sha(path)
+        self.analyses.clear()
+        analysis = self.client.get(f"/api/cvs/{cv_id}/analysis").json()
+        self.assertEqual(analysis["status"], "completed")
+        self.assertNotIn("interview_questions", analysis)
+        self.assertEqual(self.client.get("/api/cvs").json()[0]["analysis_status"], "completed")
+        self.assertEqual((sha(path), self.analyses), (before, []))
+
     def test_generation_keeps_the_cv_when_the_analysis_fails(self):
         # Le pipeline enregistre une analyse en échec (cv/pipeline.py) : le CV reste disponible
         self.fake_analyzer = lambda folder, profile: failed_analysis("L'analyse de correspondance a échoué",
