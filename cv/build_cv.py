@@ -7,6 +7,7 @@ from pathlib import Path
 
 from cv.document import load_document, save_document, selected_ids, validate_document
 from cv.layout import LAYOUT_FILE, write_layout
+from cv.metadata import create_metadata
 from cv.render import render_sections
 
 
@@ -50,14 +51,16 @@ def write_cv(doc: dict, offer: dict, verification_issues: list | None = None,
              applications_dir: Path | None = None) -> Path:
     """
     Crée cv/applications/<company>-<role>/ depuis le template, y écrit le CV structuré
-    (cv.json), les sections LaTeX calculées à partir de lui, l'offre et la sélection,
-    puis renvoie le chemin du .tex principal.
+    (cv.json), les sections LaTeX calculées à partir de lui, l'offre, la sélection et les
+    dates de la candidature (metadata.json), puis renvoie le chemin du .tex principal.
     """
 
     validate_document(doc)
     folder = _new_application_dir(doc["company"], doc["role"], applications_dir)
 
     shutil.copytree(TEMPLATE_DIR, folder)
+    # Date de création explicite : celle du dossier est celle du template (copytree copie ses dates)
+    create_metadata(folder)
 
     name_parts = _ascii_words(doc["header"]["name"]) + ["Candidature"]
     name_parts += _ascii_words(doc["company"]) + _ascii_words(doc["role"])

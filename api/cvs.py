@@ -31,6 +31,7 @@ from cv.analysis import analyze_folder, load_analysis
 from cv.build_cv import ROOT, _count_pages, rebuild_cv
 from cv.document import DOCUMENT_FILE, CVDocumentError, load_document, save_document, validate_document
 from cv.layout import LAYOUT_FILE
+from cv.metadata import cv_dates, mark_updated
 from cv.pipeline import STEPS, generate_from_url
 from jobs.url_check import UnsafeUrlError, check_public_url
 
@@ -251,7 +252,8 @@ def _summary(folder: Path) -> dict:
     pdf = _pdf(folder)
     pages = _pages(folder)
     stamps = [p.stat().st_mtime for p in (folder / DOCUMENT_FILE, pdf) if p and p.exists()]
-    stat = folder.stat()
+    # Pas la date du dossier pour created_at : copié depuis cv/template, il porte celle du template
+    created_at, updated_at = cv_dates(folder, max(stamps) if stamps else folder.stat().st_mtime)
     return {
         "id": folder.name,
         "company": (doc or {}).get("company") or offer.get("company"),
@@ -266,8 +268,8 @@ def _summary(folder: Path) -> dict:
         "fits_one_page": pages == 1 if pages else None,
         "verification_issues": len(selection.get("verification_issues") or []),
         **_analysis_summary(folder),
-        "created_at": getattr(stat, "st_birthtime", stat.st_ctime),
-        "updated_at": max(stamps) if stamps else stat.st_mtime,
+        "created_at": created_at,                  # secondes Unix (UTC) ; None si aucune date fiable
+        "updated_at": updated_at,
     }
 
 
@@ -301,7 +303,9 @@ def list_cvs(base: Path = Depends(applications_dir)):
     base = Path(base)
     folders = [f for f in base.iterdir() if f.is_dir() and not f.is_symlink() and CV_ID_PATTERN.match(f.name)] \
         if base.is_dir() else []
-    return sorted((_summary(f) for f in folders), key=lambda cv: cv["updated_at"], reverse=True)
+    # Les plus récents d'abord (date de création) ; ceux dont la date est inconnue à la fin
+    return sorted((_summary(f) for f in folders),
+                  key=lambda cv: (cv["created_at"] is not None, cv["created_at"] or 0, cv["updated_at"]), reverse=True)
 
 
 @router.get("/{cv_id}")
@@ -381,6 +385,7 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
                     (shutil.copytree if saved.is_dir() else shutil.copy2)(saved, item)
             problems = [_clean(error)] if isinstance(error, RuntimeError) else [type(error).__name__]
             raise ApiError(422, "La compilation a échoué : la version précédente du CV a été conservée.", problems)
+        mark_updated(folder)
         return {"cv": _summary(folder), "document": load_document(folder), "pages": pages, "fits_one_page": pages == 1,
                 "has_layout": (folder / "build" / LAYOUT_FILE).is_file()}
     finally:

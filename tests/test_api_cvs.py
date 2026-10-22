@@ -629,6 +629,65 @@ class DeleteTest(ApiCvTestCase):
         self.assertFalse(cvs.LOCKS._lock(self.cv_id).locked())                                  # verrou libéré
 
 
+class DatesTest(ApiCvTestCase):
+    """created_at = vraie date de génération (metadata.json), jamais celle du template ; updated_at suit les modifications."""
+
+    OLD = time.mktime((2001, 1, 1, 12, 0, 0, 0, 0, -1))
+
+    def dates(self, cv_id):
+        listed = next(cv for cv in self.client.get("/api/cvs").json() if cv["id"] == cv_id)
+        return listed["created_at"], listed["updated_at"]
+
+    def test_creation_date_is_the_generation_time_and_survives_edits(self):
+        before = time.time()
+        cv_id = self.new_cv()
+        after = time.time()
+        folder = self.applications / cv_id
+        os.utime(folder, (self.OLD, self.OLD))          # date du dossier = date du template copié
+        created, updated = self.dates(cv_id)
+        self.assertTrue(before - 1 <= created <= after + 1)
+        self.assertNotEqual(created, folder.stat().st_mtime)
+        detail = self.client.get(f"/api/cvs/{cv_id}").json()["cv"]
+        self.assertEqual((detail["created_at"], detail["updated_at"]), (created, updated))
+
+        doc = self.client.get(f"/api/cvs/{cv_id}").json()["document"]
+        doc["header"]["summary"] = "Résumé modifié."
+        time.sleep(0.01)
+        body = self.client.put(f"/api/cvs/{cv_id}", json=doc).json()
+        self.assertEqual(body["cv"]["created_at"], created)
+        self.assertGreater(body["cv"]["updated_at"], updated)
+        self.assertEqual(self.dates(cv_id), (created, body["cv"]["updated_at"]))
+
+    def test_failed_recompilation_changes_no_date(self):
+        cv_id = self.new_cv()
+        dates = self.dates(cv_id)
+        doc = self.client.get(f"/api/cvs/{cv_id}").json()["document"]
+        doc["header"]["summary"] = "Résumé modifié."
+        main.app.dependency_overrides[cvs.cv_rebuilder] = lambda: mock.Mock(side_effect=RuntimeError("LaTeX"))
+        self.assertEqual(self.client.put(f"/api/cvs/{cv_id}", json=doc).status_code, 422)
+        self.assertEqual(self.dates(cv_id), dates)
+
+    def test_legacy_cv_has_no_invented_date_and_stays_readable(self):
+        cv_id = self.legacy_cv()
+        folder = self.applications / cv_id
+        (folder / "offer.json").unlink()
+        os.utime(folder, (self.OLD, self.OLD))
+        created, updated = self.dates(cv_id)
+        self.assertIsNone(created)
+        self.assertIsNotNone(updated)
+        self.assertEqual(self.client.get(f"/api/cvs/{cv_id}/pdf").status_code, 200)
+        self.assertFalse((folder / "metadata.json").exists())   # les dossiers existants ne sont pas modifiés
+
+    def test_list_puts_newest_creations_first_and_unknown_dates_last(self):
+        legacy = self.legacy_cv()
+        (self.applications / legacy / "offer.json").unlink()
+        first = self.new_cv()
+        time.sleep(0.01)
+        second = self.new_cv()
+        ids = [cv["id"] for cv in self.client.get("/api/cvs").json()]
+        self.assertEqual(ids, [second, first, legacy])
+
+
 class CompatibilityTest(ApiCvTestCase):
 
     def test_candidate_endpoints_still_work(self):
