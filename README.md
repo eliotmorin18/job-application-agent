@@ -6,7 +6,7 @@
 
 You describe your background once in a local candidate profile. For each offer, the tool reads the job posting, picks the experiences and projects that matter for it, writes a CV adapted to the offer, checks that everything in it comes from your profile, and exports it to PDF with LaTeX.
 
-The goal is a CV that fits the offer **and stays faithful to what you have actually done**. It runs locally: from the terminal, or from a local web interface (React + FastAPI) to manage the candidate profile, import a CV and generate, edit and review CVs (« Mes CV »). No account, no database, no hosted server.
+The goal is a CV that fits the offer **and stays faithful to what you have actually done**. It runs locally: from the terminal, or from a local web interface (React + FastAPI) to manage the candidate profile, import a CV and prepare applications: offer analysis, interview preparation and a tailored CV to edit and download (« Mes candidatures »). No account, no database, no hosted server.
 
 ## Features
 
@@ -21,7 +21,7 @@ What works today:
 - **List the requirements of the offer that your profile does not cover**, so you know your gaps.
 - **Manage the candidate profile from a local web interface**: view, add, edit and delete experiences, education, projects, skills, languages, interests, contact details, career status and preferences.
 - **Import an existing CV (PDF)**: Claude extracts a proposal, which is compared with the profile (duplicates, uncertain fields); you choose what to add, update or skip, and can correct any extracted value, before anything is saved.
-- **« Mes CV » in the web interface**: generate a CV from an offer URL and follow its steps, list the saved CVs, edit a CV (content, order, entries added from the profile) with PDF recompilation and clickable zones, read the offer/profile match analysis with possible interview questions, and delete a CV.
+- **« Mes candidatures » in the web interface**: prepare an application from an offer URL and follow its steps, list the applications (job title, company, date), and on each application read the offer/profile match analysis, prepare the interview (advice, possible questions), edit the CV (content, order, entries added from the profile) with PDF recompilation and clickable zones, download it, or delete the application. For now an application is one generated CV folder.
 
 ## How it works
 
@@ -36,7 +36,7 @@ Job offer URL
   → analyse the match with the offer cv/analysis.py        (Claude; score computed in Python: cv/fit_score.py)
 ```
 
-Claude never writes LaTeX: it returns the CV content as JSON (`cv/document.py`). Dates, places, contact details and links are taken from your profile, and Python turns the content into the LaTeX sections of the template. Each generated CV keeps its content in `cv.json`, which the « Mes CV » editor modifies before recompiling the PDF.
+Claude never writes LaTeX: it returns the CV content as JSON (`cv/document.py`). Dates, places, contact details and links are taken from your profile, and Python turns the content into the LaTeX sections of the template. Each generated CV keeps its content in `cv.json`, which the CV editor of « Mes candidatures » modifies before recompiling the PDF.
 
 `cv/cli.py` runs the whole pipeline. Claude is called through the Claude Code CLI (`llm/claude_cli.py`, `claude -p`), with a JSON schema that forces structured answers.
 
@@ -98,7 +98,7 @@ cv/applications/<company>-<role>/build/<FirstName>_<LastName>_Candidature_<Compa
 
 Always read the CV before sending it.
 
-### Web interface (candidate profile, CV import, « Mes CV »)
+### Web interface (candidate profile, CV import, « Mes candidatures »)
 
 Additional prerequisites: **Node.js 22** and **[Bun](https://bun.sh)** (the frontend lockfile is `frontend/bun.lock`).
 
@@ -123,14 +123,14 @@ cd frontend
 npm run dev
 ```
 
-Open **http://localhost:8080/candidat** (profile) or **http://localhost:8080/cvs** (« Mes CV »). The frontend calls `/api/...`; Vite forwards these calls to the backend on `http://127.0.0.1:8000`.
+Open **http://localhost:8080/candidat** (profile) or **http://localhost:8080/cvs** (« Mes candidatures »). The frontend calls `/api/...`; Vite forwards these calls to the backend on `http://127.0.0.1:8000`.
 
 - Every change is saved directly in `profile/private/candidate.yaml` (comments and formatting are kept), through `candidate/manager.py`.
 - CV import calls Claude through the backend only (`candidate/import_cv.py`), which can take 1 to 3 minutes. Extracted proposals are kept in `profile/private/extracted/` and can be reopened from the import page without a new extraction.
-- To try the profile pages without the backend, with fictional data: create `frontend/.env.local` with `VITE_API_MODE=mock` (see `frontend/.env.example`). CV import and « Mes CV » are not available in this mode.
+- To try the profile pages without the backend, with fictional data: create `frontend/.env.local` with `VITE_API_MODE=mock` (see `frontend/.env.example`). CV import and « Mes candidatures » are not available in this mode.
 - If Node.js runs as x64 on an Apple Silicon Mac (Rosetta), install with `bun install --frozen-lockfile --cpu=x64` so that native modules match Node.
 
-« Mes CV » runs generations and analyses in the background; their routes, limits and the protection of offer URLs are described in [`docs/architecture.md`](docs/architecture.md).
+« Mes candidatures » runs generations and analyses in the background; their routes, limits and the protection of offer URLs are described in [`docs/architecture.md`](docs/architecture.md).
 
 ### Tests
 
@@ -153,7 +153,7 @@ job-application-agent/
 ├── requirements.txt
 ├── api/
 │   ├── main.py                 # local FastAPI backend for the web interface (profile, CV import)
-│   ├── cvs.py                  # « Mes CV » routes: generation and analysis tasks, list, read, PDF, layout, edit, delete
+│   ├── cvs.py                  # « Mes candidatures » routes: generation and analysis tasks, list, read, PDF, layout, edit, delete
 │   └── common.py               # shared error format and profile path
 ├── frontend/                   # React web interface (Lovable, TanStack Start)
 ├── candidate/

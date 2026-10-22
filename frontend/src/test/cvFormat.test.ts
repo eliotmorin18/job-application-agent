@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cvTitle, formatTimestamp, taskText } from "@/features/cvs/format";
+import { applicationTitle, formatTimestamp, taskText } from "@/features/cvs/format";
 
 describe("formatTimestamp", () => {
   it("formats a creation date (Unix seconds, UTC) in French", () => {
@@ -14,13 +14,15 @@ describe("formatTimestamp", () => {
   });
 });
 
-describe("cvTitle", () => {
-  it("falls back from the role to the job title, then to the folder name", () => {
-    expect(cvTitle({ id: "dossier", role: "Data Engineer", job_title: "Stage" })).toBe(
+describe("applicationTitle", () => {
+  it("falls back from the job title of the offer to the role of the CV, then to the folder name", () => {
+    expect(
+      applicationTitle({ id: "dossier", role: "Data Engineer", job_title: "Stage data" }),
+    ).toBe("Stage data");
+    expect(applicationTitle({ id: "dossier", role: "Data Engineer", job_title: null })).toBe(
       "Data Engineer",
     );
-    expect(cvTitle({ id: "dossier", role: null, job_title: "Stage" })).toBe("Stage");
-    expect(cvTitle({ id: "dossier", role: null, job_title: null })).toBe("dossier");
+    expect(applicationTitle({ id: "dossier", role: null, job_title: null })).toBe("dossier");
   });
 });
 

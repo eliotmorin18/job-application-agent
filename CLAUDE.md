@@ -5,25 +5,28 @@ user (never bulk). Implemented today: from a job offer URL, generate a tailored 
 explain the offer and analyse the fit with the candidate profile.
 
 ## Current scope (branch `refactor/mvp-cv`)
-- Implemented: candidate profile + CV import (« Candidat »); « Mes CV »: generation from a URL,
-  list, editing of `cv.json` with PDF recompilation and clickable zones, fit analysis with
-  interview questions, deletion.
-- Not implemented: « Candidatures » and « Paramètres » (disabled "Bientôt" entries in the sidebar),
-  submitting applications. `main` still holds an older prototype (server.py, workflows/): do not
-  reuse it unless asked.
+- Implemented: candidate profile + CV import (« Candidat »); « Mes candidatures » (routes `/cvs`,
+  formerly « Mes CV »): preparing an application from a URL (offer analysis + tailored CV), list,
+  application page with three tabs (« Offre et adéquation », « Préparation à l'entretien », « CV »:
+  editing of `cv.json` with PDF recompilation and clickable zones), deletion. One application = one
+  CV folder for now: the interface uses the application vocabulary, the code and API keep `cv`.
+- Not implemented: application tracking (statuses, board), cover letters, « Paramètres » (disabled
+  "Bientôt" entry in the sidebar), submitting applications. `main` still holds an older prototype
+  (server.py, workflows/): do not reuse it unless asked.
 
-## Product direction (decided, not yet implemented)
+## Product direction (decided, partly implemented)
 - The app will become centred on the application (« candidature ») instead of the CV: an
   application is a potential job opportunity that may hold an offer, a tailored CV, a cover
-  letter, a status, notes and other information.
+  letter, a status, notes and other information. First step done (interface only): « Mes CV »
+  became « Mes candidatures », without any backend, API or storage change.
 - The existing CV pipeline is kept and reused as much as possible.
-- The target data model, migrations and interface architecture are still to be designed: none of
-  them exists yet. Next step: design this transition, then build application tracking.
+- The target data model and migrations are still to be designed: none of them exists yet. Next
+  step: design this transition, then build application tracking in « Mes candidatures ».
 
 ## Architecture
 Backend: Python 3.12 (`.venv`), FastAPI, organised by feature.
-- `api/` — `main.py` (profile, import routes), `cvs.py` (« Mes CV » routes, background tasks,
-  locks), `common.py` (error format `{"detail": {"message", "problems"}}`, `profile_path`).
+- `api/` — `main.py` (profile, import routes), `cvs.py` (« Mes candidatures » routes, background
+  tasks, locks), `common.py` (error format `{"detail": {"message", "problems"}}`, `profile_path`).
 - `candidate/` — `profile.py` (load/validate), `manager.py` (edits), `import_cv.py`,
   `extract_profile.py`, `review_import.py`, `apply_import.py` (CV import flow).
 - `jobs/` — `url_check.py` (refuses local/internal URLs), `read_job.py` (Playwright),
@@ -52,7 +55,7 @@ Vitest). Rules in `frontend/AGENTS.md`.
   only with the user's agreement; new fields must stay compatible with saved files.
 - The fit score is computed and stored but never displayed in the interface.
 - "Missing" and "not documented" requirements stay distinct.
-- No demo data or mock fallback in « Mes CV »: show backend errors as they are.
+- No demo data or mock fallback in « Mes candidatures »: show backend errors as they are.
 
 ## Tests (always fictional data)
 - Never call Claude for real (patch `run_claude`), never read or write the real profile or real

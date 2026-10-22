@@ -12,9 +12,9 @@ export function formatTimestamp(seconds: number | null | undefined): string {
   }).format(d);
 }
 
-/** Title of a saved CV: the role written in the CV, else the job title of the offer, else its folder name. */
-export function cvTitle(cv: Pick<CvSummary, "id" | "role" | "job_title">): string {
-  return cv.role || cv.job_title || cv.id;
+/** Title of an application: the job title of the offer, else the role written in the CV, else its folder name. */
+export function applicationTitle(cv: Pick<CvSummary, "id" | "role" | "job_title">): string {
+  return cv.job_title || cv.role || cv.id;
 }
 
 // "Par exemple, tu pourrais …", "Tu pourrais aussi …", "For example, you could …"

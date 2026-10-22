@@ -100,7 +100,7 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
     return (
       <ReadOnlyPreview
         cv={cv}
-        reason="Ce CV a été créé avant le format modifiable (cv.json) : seul son PDF est consultable. Générez un nouveau CV pour cette offre afin de pouvoir le retoucher."
+        reason="Ce CV a été créé avant le format modifiable (cv.json) : seul son PDF est consultable. Préparez une nouvelle candidature pour cette offre afin de pouvoir retoucher son CV."
       />
     );
 

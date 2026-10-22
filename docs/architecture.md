@@ -66,7 +66,7 @@ The score is stored but not displayed.
 **Deletion.** `DELETE /api/cvs/{cv_id}`: the folder is renamed to a hidden name, then removed;
 409 while a generation, analysis or edit of that CV is running.
 
-## « Mes CV » API (`api/cvs.py`)
+## « Mes candidatures » API (`api/cvs.py`)
 
 | Route | Purpose |
 |---|---|
@@ -98,6 +98,13 @@ TanStack Start (file routes in `src/routes/`), TanStack Query, shadcn/ui. Featur
 `cvTypes.ts` mirrors the backend; UI-only shapes (zones, selection, steps, entries built from the
 profile) are derived in `features/cvs/adapters.ts`. The PDF is rendered with pdfjs-dist; its URL and
 the layout query are keyed by `updated_at`, so the preview and its zones always match.
+
+« Mes candidatures » (routes `/cvs` and `/cvs/$cvId`, formerly « Mes CV ») presents each CV folder as
+an application: the title is the job title of the offer (else the role of the CV, else the folder
+name). The application page has three tabs in `?tab=`: `analyse` (« Offre et adéquation »),
+`preparation` (« Préparation à l'entretien ») and `edition` (« CV »). The first two are the same
+`AnalysisTab` with a `view` prop (one query, same missing/running/failed states); unknown values fall
+back to `analyse`. Only the interface changed: the API, files and code names keep `cv`.
 
 ## Limits
 

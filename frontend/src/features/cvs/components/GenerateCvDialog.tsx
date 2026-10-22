@@ -44,7 +44,7 @@ function resultNotes(task: CvTask): string[] {
     );
   if (result.analysis_status === "failed")
     notes.push(
-      "L'analyse de correspondance a échoué : le CV est prêt, et vous pourrez relancer l'analyse depuis l'onglet « Analyse de l'offre ».",
+      "L'analyse de correspondance a échoué : le CV est prêt, et vous pourrez relancer l'analyse depuis l'onglet « Offre et adéquation ».",
     );
   return notes;
 }
@@ -74,8 +74,8 @@ export function GenerateCvDialog({
     notified.current = taskId;
     void qc.invalidateQueries({ queryKey: cvListQuery.queryKey, exact: true });
     if (!open) {
-      if (task?.status === "completed") toast.success("Le nouveau CV est prêt.");
-      else toast.error("La génération du CV a échoué.");
+      if (task?.status === "completed") toast.success("Candidature préparée.");
+      else toast.error("La préparation de la candidature a échoué.");
     }
   }, [taskId, finished, task?.status, open, qc]);
 
@@ -118,7 +118,7 @@ export function GenerateCvDialog({
   const failure =
     task?.status === "failed"
       ? [task.error?.message, ...(task.error?.problems ?? [])].filter(Boolean).join(" ") ||
-        "La génération a échoué."
+        "La préparation a échoué."
       : pollError
         ? errorMessage(pollError)
         : null;
@@ -130,10 +130,10 @@ export function GenerateCvDialog({
           <div className="mb-2 flex size-11 items-center justify-center rounded-full bg-accent text-accent-foreground">
             <Sparkles className="size-5" />
           </div>
-          <DialogTitle>Générer un CV</DialogTitle>
+          <DialogTitle>Préparer une candidature</DialogTitle>
           <DialogDescription>
-            Collez l'URL d'une offre d'emploi : le CV sera adapté automatiquement à partir de votre
-            profil.
+            Collez l'URL d'une offre d'emploi : l'offre sera analysée et un CV adapté sera rédigé à
+            partir de votre profil.
           </DialogDescription>
         </DialogHeader>
 
@@ -163,7 +163,7 @@ export function GenerateCvDialog({
               </Button>
               <Button onClick={() => void start()} disabled={!url.trim() || starting}>
                 {starting && <Loader2 className="size-4 animate-spin" />}
-                Lancer la génération
+                Lancer la préparation
               </Button>
             </DialogFooter>
           </>
@@ -204,7 +204,7 @@ export function GenerateCvDialog({
             {running && task?.status === "running" && (
               <p className="text-xs text-muted-foreground">
                 Cela prend généralement quelques minutes. Vous pouvez fermer cette fenêtre : la
-                génération continue.
+                préparation continue.
               </p>
             )}
 
@@ -234,7 +234,7 @@ export function GenerateCvDialog({
               )}
               {task?.status === "completed" && task.cv_id && (
                 <Button onClick={openCv}>
-                  Ouvrir le CV
+                  Ouvrir la candidature
                   <ArrowRight className="size-4" />
                 </Button>
               )}

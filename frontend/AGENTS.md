@@ -14,7 +14,7 @@
 - Candidate data keys stay snake_case to match the Python backend contract in `src/services/api/types.ts`.
 - Items without an `id` (legacy education) are addressed as `index-N` via `getItemKey`, so ids stay backend-owned.
 - Routing uses TanStack Router (fixed by the platform), not React Router; candidate tabs live in the `?tab=` search param.
-- "Mes CV" data flows only through `src/services/api/cvApi.ts` (HTTP client of FastAPI `api/cvs.py`, implements `CvApi` in `cvTypes.ts`); types mirror the backend exactly (`cv.json`, `analysis.json`, `layout.json`), there is no demo data and no mock fallback: errors (backend down, 404, 409, 422) are shown as they are.
+- "Mes candidatures" (routes `/cvs`, feature folder `features/cvs`, formerly "Mes CV") data flows only through `src/services/api/cvApi.ts` (HTTP client of FastAPI `api/cvs.py`, implements `CvApi` in `cvTypes.ts`); types mirror the backend exactly (`cv.json`, `analysis.json`, `layout.json`), there is no demo data and no mock fallback: errors (backend down, 404, 409, 422) are shown as they are.
 - UI-only shapes (clickable zones, selection, generation steps, entries added from the profile) are derived in `src/features/cvs/adapters.ts`; never change `cvTypes.ts` to fit the UI.
 - PDFs are compiled by the backend (LaTeX) and rendered with pdfjs-dist; the PDF URL and the `layout.json` query are keyed by the CV `updated_at`, so preview and zones always belong to the same compiled version.
 - The fit score of `analysis.json` is never displayed (product choice).

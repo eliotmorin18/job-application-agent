@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  Briefcase,
   CalendarDays,
   ChevronRight,
-  FileText,
-  Files,
   Lock,
   RefreshCw,
   Sparkles,
@@ -18,10 +17,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/features/candidate/components/common";
 import type { CvSummary } from "@/services/api/cvTypes";
 import { GenerateCvDialog } from "../components/GenerateCvDialog";
-import { cvTitle, formatTimestamp } from "../format";
+import { applicationTitle, formatTimestamp } from "../format";
 import { cvAnalysisQuery, errorMessage, useCvList } from "../hooks";
 
-/** Short summary of the offer, only when an analysis has been saved for this CV (never invented). */
+/** Short summary of the offer, only when an analysis has been saved for this application (never invented). */
 function JobSummary({ cv }: { cv: CvSummary }) {
   const { data } = useQuery({
     ...cvAnalysisQuery(cv.id),
@@ -43,14 +42,15 @@ export function CvListPage() {
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-8 sm:py-10">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Mes CV</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Mes candidatures</h1>
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
-            Retrouvez les CV générés pour chaque candidature, avec leur analyse d'adéquation.
+            Préparez une candidature pour chaque offre : analyse du poste, préparation à l'entretien
+            et CV adapté.
           </p>
         </div>
         <Button className="shrink-0" onClick={() => setGenerateOpen(true)}>
           <Sparkles className="size-4" />
-          Générer un CV
+          Préparer une candidature
         </Button>
       </div>
 
@@ -58,7 +58,7 @@ export function CvListPage() {
         {error ? (
           <EmptyState
             icon={WifiOff}
-            title="Impossible de charger vos CV"
+            title="Impossible de charger vos candidatures"
             text={errorMessage(error)}
             action={
               <Button variant="outline" onClick={() => void refetch()} disabled={isFetching}>
@@ -75,13 +75,13 @@ export function CvListPage() {
           </div>
         ) : cvs.length === 0 ? (
           <EmptyState
-            icon={Files}
-            title="Aucun CV enregistré"
-            text="Générez votre premier CV adapté à une offre d'emploi en collant simplement son URL."
+            icon={Briefcase}
+            title="Aucune candidature"
+            text="Préparez votre première candidature en collant simplement l'URL d'une offre d'emploi : analyse du poste, préparation à l'entretien et CV adapté."
             action={
               <Button onClick={() => setGenerateOpen(true)}>
                 <Sparkles className="size-4" />
-                Générer un CV
+                Préparer une candidature
               </Button>
             }
           />
@@ -97,25 +97,29 @@ export function CvListPage() {
                 style={{ animationDelay: `${i * 40}ms` }}
               >
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-foreground">
-                  <FileText className="size-[18px]" />
+                  <Briefcase className="size-[18px]" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-medium leading-snug group-hover:text-primary">
-                      {cvTitle(cv)}
+                      {applicationTitle(cv)}
                     </h3>
                     {!cv.editable && (
                       <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
                         <Lock className="size-3" />
-                        PDF uniquement
+                        CV non modifiable
                       </Badge>
                     )}
                   </div>
-                  {cv.company && <p className="text-sm text-muted-foreground">{cv.company}</p>}
+                  {cv.company && (
+                    <p className="text-sm font-medium text-foreground/80">{cv.company}</p>
+                  )}
                   <JobSummary cv={cv} />
                   <p className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
                     <CalendarDays className="size-3" />
-                    {formatTimestamp(cv.created_at)}
+                    {cv.created_at === null
+                      ? formatTimestamp(cv.created_at)
+                      : `Préparée le ${formatTimestamp(cv.created_at)}`}
                   </p>
                 </div>
                 <ChevronRight className="mt-2 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />

@@ -1,6 +1,14 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Download, ExternalLink, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarDays,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -11,18 +19,29 @@ import { ConfirmDialog } from "@/features/candidate/components/common";
 import { ApiError, cvApi } from "@/services/api/cvApi";
 import { AnalysisTab } from "../components/AnalysisTab";
 import { CvEditorTab } from "../components/CvEditorTab";
-import { cvTitle } from "../format";
+import { applicationTitle, formatTimestamp } from "../format";
 import { cvListQuery, errorMessage, useCvList } from "../hooks";
 
-export const CV_DETAIL_TABS = ["analyse", "edition"] as const;
+/** `?tab=` values: « Offre et adéquation », « Préparation à l'entretien », « CV » (older links keep working). */
+export const CV_DETAIL_TABS = ["analyse", "preparation", "edition"] as const;
 export type CvDetailTab = (typeof CV_DETAIL_TABS)[number];
+
+/** [value, label, short label shown on narrow screens where the three full labels do not fit]. */
+const TABS: [CvDetailTab, string, string][] = [
+  ["analyse", "Offre et adéquation", "Offre"],
+  ["preparation", "Préparation à l'entretien", "Entretien"],
+  ["edition", "CV", "CV"],
+];
+
+const TAB_TRIGGER =
+  "relative flex-none rounded-none border-0 bg-transparent px-3 pb-3 pt-1.5 text-muted-foreground shadow-none after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-transparent hover:text-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary";
 
 function BackLink() {
   return (
     <Button asChild variant="ghost" size="sm" className="-ml-2 text-muted-foreground">
       <Link to="/cvs">
         <ArrowLeft className="size-4" />
-        Retour à Mes CV
+        Retour à Mes candidatures
       </Link>
     </Button>
   );
@@ -55,11 +74,11 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
     setDeleting(true);
     try {
       await cvApi.deleteCv(cvId);
-      toast.success("CV supprimé");
+      toast.success("Candidature supprimée");
       await backToList();
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        toast.info("Ce CV avait déjà été supprimé.");
+        toast.info("Cette candidature avait déjà été supprimée.");
         await backToList();
       } else {
         toast.error(errorMessage(e));
@@ -100,7 +119,7 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
       </div>
     );
 
-  const title = cvTitle(cv);
+  const title = applicationTitle(cv);
   const pdfName = `CV_${(cv.company || cv.id).replace(/[^\p{L}\p{N}]+/gu, "_")}.pdf`;
 
   return (
@@ -111,6 +130,12 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           {cv.company && <p className="mt-1 text-base text-muted-foreground">{cv.company}</p>}
+          <p className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <CalendarDays className="size-3" />
+            {cv.created_at === null
+              ? formatTimestamp(cv.created_at)
+              : `Préparée le ${formatTimestamp(cv.created_at)}`}
+          </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           {cv.source_url && (
@@ -125,13 +150,13 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
             <Button asChild size="sm">
               <a href={cvApi.pdfUrl(cv.id, cv.updated_at)} download={pdfName}>
                 <Download className="size-4" />
-                Télécharger le PDF
+                Télécharger le CV
               </a>
             </Button>
           ) : (
             <Button size="sm" disabled title="Ce CV n'a pas de PDF compilé">
               <Download className="size-4" />
-              Télécharger le PDF
+              Télécharger le CV
             </Button>
           )}
           <Button
@@ -150,30 +175,27 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        title="Supprimer ce CV ?"
-        description={`Le CV généré pour « ${title} »${cv.company ? ` (${cv.company})` : ""}, son PDF, son analyse et l'offre enregistrée seront définitivement supprimés.`}
-        confirmLabel="Supprimer le CV"
+        title="Supprimer cette candidature ?"
+        description={`La candidature « ${title} »${cv.company ? ` (${cv.company})` : ""} sera définitivement supprimée : l'offre enregistrée, son analyse, le CV et son PDF.`}
+        confirmLabel="Supprimer la candidature"
         onConfirm={() => void deleteCv()}
       />
 
       <Tabs value={tab} onValueChange={setTab} className="mt-6">
         <TabsList className="h-auto w-full justify-start gap-1 rounded-none border-b bg-transparent p-0">
-          <TabsTrigger
-            value="analyse"
-            className="relative flex-none rounded-none border-0 bg-transparent px-3 pb-3 pt-1.5 text-muted-foreground shadow-none after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-transparent hover:text-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary"
-          >
-            Analyse de l'offre
-          </TabsTrigger>
-          <TabsTrigger
-            value="edition"
-            className="relative flex-none rounded-none border-0 bg-transparent px-3 pb-3 pt-1.5 text-muted-foreground shadow-none after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-transparent hover:text-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:after:bg-primary"
-          >
-            Éditer le CV
-          </TabsTrigger>
+          {TABS.map(([value, label, shortLabel]) => (
+            <TabsTrigger key={value} value={value} className={TAB_TRIGGER}>
+              <span className="sm:hidden">{shortLabel}</span>
+              <span className="hidden sm:inline">{label}</span>
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="analyse" className="mt-6">
-          <AnalysisTab cv={cv} />
+          <AnalysisTab cv={cv} view="offre" />
+        </TabsContent>
+        <TabsContent value="preparation" className="mt-6">
+          <AnalysisTab cv={cv} view="preparation" />
         </TabsContent>
         <TabsContent value="edition" className="mt-6">
           <CvEditorTab cv={cv} />

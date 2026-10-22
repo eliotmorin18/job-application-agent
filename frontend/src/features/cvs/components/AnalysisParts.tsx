@@ -1,4 +1,4 @@
-// Presentational pieces of the "Analyse de l'offre" tab. Display only: texts come from analysis.json unchanged.
+// Presentational pieces of the « Offre et adéquation » and « Préparation à l'entretien » tabs. Display only: texts come from analysis.json unchanged.
 
 import {
   Briefcase,
@@ -45,6 +45,43 @@ export function FoldableBlock({
         <ChevronDown className="size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/fold:rotate-180" />
       </CollapsibleTrigger>
       <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/**
+ * Main section of the « Offre et adéquation » tab (level 1), closed by default: a card whose header
+ * stays visible when folded. Larger and bolder than the FoldableBlock rows (level 2) it may contain.
+ * Each section folds on its own, so several can be open at once. Display only: no request on toggle.
+ */
+export function FoldableSection({
+  icon: Icon,
+  title,
+  count,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  count?: number | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible asChild className="group/section">
+      <section className="overflow-hidden rounded-xl border bg-card shadow-soft">
+        <h3>
+          <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-4 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40 sm:px-5">
+            <Icon className="size-[18px] shrink-0 text-muted-foreground" />
+            <span className="flex-1 text-base font-semibold tracking-tight">{title}</span>
+            {count !== undefined && (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums text-muted-foreground">
+                {count}
+              </span>
+            )}
+            <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform duration-200 group-data-[state=open]/section:rotate-180" />
+          </CollapsibleTrigger>
+        </h3>
+        <CollapsibleContent className="px-4 pb-5 pt-1 sm:px-5">{children}</CollapsibleContent>
+      </section>
     </Collapsible>
   );
 }

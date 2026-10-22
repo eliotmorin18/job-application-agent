@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { FileText, Send, Settings, UserRound, type LucideIcon } from "lucide-react";
+import { Briefcase, Settings, UserRound, type LucideIcon } from "lucide-react";
 
 import {
   Sidebar,
@@ -17,10 +17,7 @@ import {
 import { initials } from "@/features/candidate/format";
 import { useProfile } from "@/features/candidate/hooks";
 
-const SOON: { label: string; icon: LucideIcon }[] = [
-  { label: "Candidatures", icon: Send },
-  { label: "Paramètres", icon: Settings },
-];
+const SOON: { label: string; icon: LucideIcon }[] = [{ label: "Paramètres", icon: Settings }];
 
 export function AppSidebar() {
   const { data } = useProfile();
@@ -59,10 +56,14 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Mes CV" isActive={pathname.startsWith("/cvs")}>
+                <SidebarMenuButton
+                  asChild
+                  tooltip="Mes candidatures"
+                  isActive={pathname.startsWith("/cvs")}
+                >
                   <Link to="/cvs">
-                    <FileText />
-                    <span>Mes CV</span>
+                    <Briefcase />
+                    <span>Mes candidatures</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

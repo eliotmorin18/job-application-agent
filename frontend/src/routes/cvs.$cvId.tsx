@@ -13,12 +13,12 @@ export const Route = createFileRoute("/cvs/$cvId")({
       { title: "Candidature — Job Application Agent" },
       {
         name: "description",
-        content: "Analysez l'adéquation de l'offre et retouchez le CV généré.",
+        content: "Comprenez l'offre, préparez l'entretien et retouchez le CV de cette candidature.",
       },
       { property: "og:title", content: "Candidature — Job Application Agent" },
       {
         property: "og:description",
-        content: "Analysez l'adéquation de l'offre et retouchez le CV généré.",
+        content: "Comprenez l'offre, préparez l'entretien et retouchez le CV de cette candidature.",
       },
     ],
   }),

@@ -52,7 +52,7 @@ de section dans la langue du CV. Tout le texte est échappé (`& % $ # _ { } ~ ^
 < > |`, « » → “ ”, € → EUR) ; la seule mise en forme permise est `**gras**`.
 Une liste vide masque la section dans le PDF.
 
-Pour modifier un CV : l'éditeur « Mes CV » (`PUT /api/cvs/{cv_id}`) enregistre le
+Pour modifier un CV : l'onglet « CV » d'une candidature (`PUT /api/cvs/{cv_id}`) enregistre le
 `cv.json` modifié, puis `build_cv.rebuild_cv(<dossier>)` réécrit les sections et
 recompile. Les CV créés avant `cv.json` ne sont pas modifiables.
 
@@ -65,7 +65,7 @@ viennent de `personal.first_name` / `personal.last_name` du profil.
 contient des données personnelles reste strictement local. Seul
 `cv/template/` (aucune donnée perso) est versionné.
 
-## Zones cliquables (éditeur « Mes CV »)
+## Zones cliquables (éditeur de CV de « Mes candidatures »)
 
 Des marqueurs invisibles `\cvanchor{clé}` (définis dans `template/main.tex`, placés par
 `render.py` dans le nom, les titres de section et l'en-tête de chaque élément) notent leur

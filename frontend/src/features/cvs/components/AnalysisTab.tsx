@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Award,
+  Briefcase,
   CircleCheck,
   CircleDashed,
   CircleHelp,
@@ -11,18 +13,13 @@ import {
   ListChecks,
   Loader2,
   MessageSquare,
+  Puzzle,
   RefreshCw,
   ScanSearch,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -36,7 +33,13 @@ import {
 import { STATUS_CLASSES, STATUS_LABELS } from "../analysisLabels";
 import { taskText } from "../format";
 import { cvAnalysisQuery, cvListQuery, errorMessage, useCvTask } from "../hooks";
-import { EvidenceBadges, FoldableBlock, InsightCard, MetaBadge } from "./AnalysisParts";
+import {
+  EvidenceBadges,
+  FoldableBlock,
+  FoldableSection,
+  InsightCard,
+  MetaBadge,
+} from "./AnalysisParts";
 import { InterviewQuestions } from "./InterviewQuestions";
 
 type WeaknessKind = "missing" | "not_documented" | "partial";
@@ -126,7 +129,14 @@ function RunningCard({ label }: { label: string }) {
   );
 }
 
-export function AnalysisTab({ cv }: { cv: CvSummary }) {
+export type AnalysisView = "offre" | "preparation";
+
+/**
+ * Fit analysis of an application. The same component (one query, same loading/missing/failed states)
+ * backs two tabs: "offre" (understanding the job, strengths, weaknesses, requirements) and
+ * "preparation" (interview advice, possible questions, skills to deepen, points of vigilance).
+ */
+export function AnalysisTab({ cv, view = "offre" }: { cv: CvSummary; view?: AnalysisView }) {
   const qc = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -220,7 +230,7 @@ export function AnalysisTab({ cv }: { cv: CvSummary }) {
         <EmptyState
           icon={ScanSearch}
           title="Analyse non effectuée"
-          text="Aucune analyse d'adéquation n'est enregistrée pour ce CV. Lancez-la pour obtenir les points forts, les points faibles et les recommandations. Le CV ne sera pas modifié."
+          text="Aucune analyse d'adéquation n'est enregistrée pour cette candidature. Lancez-la pour obtenir les points forts, les points faibles et les recommandations. Le CV ne sera pas modifié."
           action={launchButton(taskError ? "Relancer l'analyse" : "Analyser cette candidature")}
         />
       </div>
@@ -249,6 +259,8 @@ export function AnalysisTab({ cv }: { cv: CvSummary }) {
   const obstacles = byCategory("obstacle");
   const requirements = a.requirements.filter((r) => !r.duplicate_of);
   const skills = [...new Set([...a.overview.technologies, ...a.overview.skills_sought])];
+  const hasPreparation =
+    interview.length + questions.length + learning.length + obstacles.length > 0;
   const hasDetails =
     a.overview.missions.length > 0 || skills.length > 0 || a.overview.possible_tasks.length > 0;
 
@@ -256,154 +268,152 @@ export function AnalysisTab({ cv }: { cv: CvSummary }) {
     <div className="space-y-4">
       {failureNotice}
 
-      {/* B. Comprendre le poste */}
-      <SectionCard title="Comprendre le poste">
-        <div className="space-y-4">
-          {a.overview.summary && (
-            <p className="text-sm leading-relaxed text-muted-foreground">{a.overview.summary}</p>
-          )}
-          {a.overview.plain_explanation && (
-            <div className="rounded-lg bg-accent/50 p-4">
-              <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-accent-foreground">
-                <Lightbulb className="size-3.5" />
-                En pratique
-              </p>
-              <p className="text-sm leading-relaxed">{a.overview.plain_explanation}</p>
-            </div>
-          )}
-
-          {hasDetails && (
-            <div className="divide-y overflow-hidden rounded-lg border">
-              {a.overview.missions.length > 0 && (
-                <FoldableBlock
-                  icon={ListChecks}
-                  title="Missions principales"
-                  count={a.overview.missions.length}
-                  defaultOpen
-                >
-                  <BulletList items={a.overview.missions} />
-                </FoldableBlock>
+      {view === "offre" ? (
+        <>
+          {/* B. Comprendre le poste */}
+          <FoldableSection icon={Briefcase} title="Comprendre le poste">
+            <div className="space-y-4">
+              {a.overview.summary && (
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  {a.overview.summary}
+                </p>
               )}
-              {skills.length > 0 && (
-                <FoldableBlock
-                  icon={Cpu}
-                  title="Technologies et compétences recherchées"
-                  count={skills.length}
-                >
-                  <TagList tags={skills} />
-                </FoldableBlock>
-              )}
-              {a.overview.possible_tasks.length > 0 && (
-                <FoldableBlock
-                  icon={CircleHelp}
-                  title="Exemples de tâches possibles"
-                  count={a.overview.possible_tasks.length}
-                >
-                  <p className="mb-2.5 text-xs text-muted-foreground">
-                    À titre d'exemple, ce poste pourrait vous amener à :
+              {a.overview.plain_explanation && (
+                <div className="rounded-lg bg-accent/50 p-4">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-accent-foreground">
+                    <Lightbulb className="size-3.5" />
+                    En pratique
                   </p>
-                  <BulletList items={a.overview.possible_tasks.map(taskText)} muted />
-                </FoldableBlock>
+                  <p className="text-sm leading-relaxed">{a.overview.plain_explanation}</p>
+                </div>
+              )}
+
+              {hasDetails && (
+                <div className="divide-y overflow-hidden rounded-lg border">
+                  {a.overview.missions.length > 0 && (
+                    <FoldableBlock
+                      icon={ListChecks}
+                      title="Missions principales"
+                      count={a.overview.missions.length}
+                      defaultOpen
+                    >
+                      <BulletList items={a.overview.missions} />
+                    </FoldableBlock>
+                  )}
+                  {skills.length > 0 && (
+                    <FoldableBlock
+                      icon={Cpu}
+                      title="Technologies et compétences recherchées"
+                      count={skills.length}
+                    >
+                      <TagList tags={skills} />
+                    </FoldableBlock>
+                  )}
+                  {a.overview.possible_tasks.length > 0 && (
+                    <FoldableBlock
+                      icon={CircleHelp}
+                      title="Exemples de tâches possibles"
+                      count={a.overview.possible_tasks.length}
+                    >
+                      <p className="mb-2.5 text-xs text-muted-foreground">
+                        À titre d'exemple, ce poste pourrait vous amener à :
+                      </p>
+                      <BulletList items={a.overview.possible_tasks.map(taskText)} muted />
+                    </FoldableBlock>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
-      </SectionCard>
+          </FoldableSection>
 
-      {/* C. Points forts */}
-      <SectionCard title="Mes points forts">
-        {a.strengths.length > 0 ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            {a.strengths.map((s, i) => (
-              <InsightCard
-                key={i}
-                tone="strength"
-                icon={CircleCheck}
-                title={s.title}
-                explanation={s.explanation}
-                footer={s.evidence.length > 0 && <EvidenceBadges evidence={s.evidence} />}
-              />
-            ))}
-          </div>
-        ) : (
-          <EmptyLine>Aucun point fort n'a été identifié dans cette analyse.</EmptyLine>
-        )}
-      </SectionCard>
+          {/* C. Points forts */}
+          <FoldableSection icon={Award} title="Mes points forts" count={a.strengths.length}>
+            {a.strengths.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                {a.strengths.map((s, i) => (
+                  <InsightCard
+                    key={i}
+                    tone="strength"
+                    icon={CircleCheck}
+                    title={s.title}
+                    explanation={s.explanation}
+                    footer={s.evidence.length > 0 && <EvidenceBadges evidence={s.evidence} />}
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyLine>Aucun point fort n'a été identifié dans cette analyse.</EmptyLine>
+            )}
+          </FoldableSection>
 
-      {/* D. Points faibles */}
-      <SectionCard title="Mes points faibles">
-        {a.weaknesses.length > 0 ? (
-          <div className="grid gap-3 md:grid-cols-2">
-            {a.weaknesses.map((w, i) => (
-              <InsightCard
-                key={i}
-                tone="weakness"
-                icon={AlertTriangle}
-                title={w.text}
-                explanation={w.explanation}
-                footer={
-                  <>
-                    <Badge className={`border-transparent font-normal ${WEAKNESS_BADGES[w.kind]}`}>
-                      {WEAKNESS_LABELS[w.kind]}
-                    </Badge>
-                    {w.category === "preferred" && <MetaBadge>Exigence souhaitée</MetaBadge>}
-                  </>
-                }
-              />
-            ))}
-          </div>
-        ) : (
-          <EmptyLine>Aucun point faible n'a été identifié dans cette analyse.</EmptyLine>
-        )}
-      </SectionCard>
-
-      {/* E. Détail des exigences */}
-      {requirements.length > 0 && (
-        <SectionCard title="Détail des exigences">
-          <Accordion type="single" collapsible>
-            <AccordionItem value="requirements" className="border-none">
-              <AccordionTrigger className="py-2 text-sm text-muted-foreground hover:no-underline">
-                <span className="flex items-center gap-2">
-                  <ClipboardList className="size-4" />
-                  Voir les {requirements.length} exigences
-                </span>
-              </AccordionTrigger>
-              <AccordionContent>
-                <ul className="divide-y">
-                  {requirements.map((r) => (
-                    <li
-                      key={r.id}
-                      className="flex flex-col gap-1.5 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">{r.text}</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{r.explanation}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <span className="text-xs text-muted-foreground">
-                          {r.category === "required"
-                            ? r.importance === "high"
-                              ? "Essentielle"
-                              : "Obligatoire"
-                            : "Souhaitée"}
-                        </span>
+          {/* D. Points faibles */}
+          <FoldableSection icon={Puzzle} title="Mes points faibles" count={a.weaknesses.length}>
+            {a.weaknesses.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                {a.weaknesses.map((w, i) => (
+                  <InsightCard
+                    key={i}
+                    tone="weakness"
+                    icon={AlertTriangle}
+                    title={w.text}
+                    explanation={w.explanation}
+                    footer={
+                      <>
                         <Badge
-                          className={`border-transparent font-normal ${STATUS_CLASSES[r.status]}`}
+                          className={`border-transparent font-normal ${WEAKNESS_BADGES[w.kind]}`}
                         >
-                          {STATUS_LABELS[r.status]}
+                          {WEAKNESS_LABELS[w.kind]}
                         </Badge>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </AccordionContent>
-            </AccordionItem>
-          </Accordion>
-        </SectionCard>
-      )}
+                        {w.category === "preferred" && <MetaBadge>Exigence souhaitée</MetaBadge>}
+                      </>
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <EmptyLine>Aucun point faible n'a été identifié dans cette analyse.</EmptyLine>
+            )}
+          </FoldableSection>
 
-      {/* F. Préparer ma candidature (the "cv" recommendations are not shown) */}
-      {interview.length + questions.length + learning.length + obstacles.length > 0 && (
+          {/* E. Détail des exigences */}
+          {requirements.length > 0 && (
+            <FoldableSection
+              icon={ClipboardList}
+              title="Détail des exigences"
+              count={requirements.length}
+            >
+              <ul className="divide-y">
+                {requirements.map((r) => (
+                  <li
+                    key={r.id}
+                    className="flex flex-col gap-1.5 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{r.text}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{r.explanation}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {r.category === "required"
+                          ? r.importance === "high"
+                            ? "Essentielle"
+                            : "Obligatoire"
+                          : "Souhaitée"}
+                      </span>
+                      <Badge
+                        className={`border-transparent font-normal ${STATUS_CLASSES[r.status]}`}
+                      >
+                        {STATUS_LABELS[r.status]}
+                      </Badge>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </FoldableSection>
+          )}
+        </>
+      ) : hasPreparation ? (
+        // F. Préparer ma candidature (the "cv" recommendations are not shown)
         <SectionCard title="Préparer ma candidature">
           <div className="divide-y overflow-hidden rounded-lg border">
             {interview.length + questions.length > 0 && (
@@ -457,9 +467,15 @@ export function AnalysisTab({ cv }: { cv: CvSummary }) {
             )}
           </div>
         </SectionCard>
+      ) : (
+        <EmptyState
+          icon={MessageSquare}
+          title="Aucun conseil de préparation"
+          text="Cette analyse ne contient pas de conseils ni de questions pour l'entretien. Vous pouvez relancer l'analyse pour les obtenir."
+        />
       )}
 
-      {a.warnings.length > 0 && (
+      {view === "offre" && a.warnings.length > 0 && (
         <p className="px-1 text-xs text-muted-foreground">{a.warnings.join(" ")}</p>
       )}
 
