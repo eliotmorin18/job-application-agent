@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CandidatIndexRouteImport } from './routes/candidat.index'
 import { Route as CandidatImportRouteImport } from './routes/candidat.import'
+import { Route as CvsIndexRouteImport } from './routes/cvs.index'
+import { Route as CvsCvIdRouteImport } from './routes/cvs.$cvId'
 import { Route as CandidatSectionIdRouteImport } from './routes/candidat.$section.$id'
 
 const IndexRoute = IndexRouteImport.update({
@@ -29,6 +31,16 @@ const CandidatImportRoute = CandidatImportRouteImport.update({
   path: '/candidat/import',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CvsIndexRoute = CvsIndexRouteImport.update({
+  id: '/cvs/',
+  path: '/cvs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CvsCvIdRoute = CvsCvIdRouteImport.update({
+  id: '/cvs/$cvId',
+  path: '/cvs/$cvId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CandidatSectionIdRoute = CandidatSectionIdRouteImport.update({
   id: '/candidat/$section/$id',
   path: '/candidat/$section/$id',
@@ -38,39 +50,61 @@ const CandidatSectionIdRoute = CandidatSectionIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/candidat/import': typeof CandidatImportRoute
+  '/cvs/$cvId': typeof CvsCvIdRoute
   '/candidat/': typeof CandidatIndexRoute
+  '/cvs/': typeof CvsIndexRoute
   '/candidat/$section/$id': typeof CandidatSectionIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/candidat/import': typeof CandidatImportRoute
+  '/cvs/$cvId': typeof CvsCvIdRoute
   '/candidat': typeof CandidatIndexRoute
+  '/cvs': typeof CvsIndexRoute
   '/candidat/$section/$id': typeof CandidatSectionIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/candidat/import': typeof CandidatImportRoute
+  '/cvs/$cvId': typeof CvsCvIdRoute
   '/candidat/': typeof CandidatIndexRoute
+  '/cvs/': typeof CvsIndexRoute
   '/candidat/$section/$id': typeof CandidatSectionIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/candidat/import' | '/candidat/' | '/candidat/$section/$id'
+  fullPaths:
+    | '/'
+    | '/candidat/import'
+    | '/cvs/$cvId'
+    | '/candidat/'
+    | '/cvs/'
+    | '/candidat/$section/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/candidat/import' | '/candidat' | '/candidat/$section/$id'
+  to:
+    | '/'
+    | '/candidat/import'
+    | '/cvs/$cvId'
+    | '/candidat'
+    | '/cvs'
+    | '/candidat/$section/$id'
   id:
     | '__root__'
     | '/'
     | '/candidat/import'
+    | '/cvs/$cvId'
     | '/candidat/'
+    | '/cvs/'
     | '/candidat/$section/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CandidatImportRoute: typeof CandidatImportRoute
+  CvsCvIdRoute: typeof CvsCvIdRoute
   CandidatIndexRoute: typeof CandidatIndexRoute
+  CvsIndexRoute: typeof CvsIndexRoute
   CandidatSectionIdRoute: typeof CandidatSectionIdRoute
 }
 
@@ -97,6 +131,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CandidatImportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cvs/': {
+      id: '/cvs/'
+      path: '/cvs'
+      fullPath: '/cvs/'
+      preLoaderRoute: typeof CvsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cvs/$cvId': {
+      id: '/cvs/$cvId'
+      path: '/cvs/$cvId'
+      fullPath: '/cvs/$cvId'
+      preLoaderRoute: typeof CvsCvIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/candidat/$section/$id': {
       id: '/candidat/$section/$id'
       path: '/candidat/$section/$id'
@@ -110,7 +158,9 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CandidatImportRoute: CandidatImportRoute,
+  CvsCvIdRoute: CvsCvIdRoute,
   CandidatIndexRoute: CandidatIndexRoute,
+  CvsIndexRoute: CvsIndexRoute,
   CandidatSectionIdRoute: CandidatSectionIdRoute,
 }
 export const routeTree = rootRouteImport

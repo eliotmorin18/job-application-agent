@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { FileText, Send, Settings, UserRound, type LucideIcon } from "lucide-react";
 
 import {
@@ -18,13 +18,13 @@ import { initials } from "@/features/candidate/format";
 import { useProfile } from "@/features/candidate/hooks";
 
 const SOON: { label: string; icon: LucideIcon }[] = [
-  { label: "Mes CV", icon: FileText },
   { label: "Candidatures", icon: Send },
   { label: "Paramètres", icon: Settings },
 ];
 
 export function AppSidebar() {
   const { data } = useProfile();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const p = data?.personal;
   const name = [p?.first_name, p?.last_name].filter(Boolean).join(" ") || "Candidat";
 
@@ -47,10 +47,22 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Candidat" isActive>
+                <SidebarMenuButton
+                  asChild
+                  tooltip="Candidat"
+                  isActive={pathname.startsWith("/candidat")}
+                >
                   <Link to="/candidat" search={{ tab: "experiences" }}>
                     <UserRound />
                     <span>Candidat</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Mes CV" isActive={pathname.startsWith("/cvs")}>
+                  <Link to="/cvs">
+                    <FileText />
+                    <span>Mes CV</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

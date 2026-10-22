@@ -6,16 +6,21 @@ const BASE_URL = (import.meta.env["VITE_API_BASE_URL"] ?? "").replace(/\/$/, "")
 const UNREACHABLE =
   "Impossible de joindre l'API locale. Lance-la depuis la racine du projet : uvicorn api.main:app --reload";
 
-/** Error returned by the API: `problems` are the readable messages of the Python backend. */
+/**
+ * Error returned by the API: `problems` are the readable messages of the Python backend,
+ * `title` its short summary (detail.message, e.g. "CV non modifiable"), empty when there is none.
+ */
 export class ApiError extends Error {
   status: number;
   problems: string[];
+  title: string;
 
-  constructor(status: number, message: string, problems: string[]) {
+  constructor(status: number, message: string, problems: string[], title = "") {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.problems = problems;
+    this.title = title;
   }
 }
 
@@ -62,7 +67,13 @@ export async function request<T>(method: string, path: string, body?: unknown): 
       throw new ApiError(response.status, UNREACHABLE, [UNREACHABLE]);
     const problems = problemsFrom(data);
     const message = problems.length ? problems.join(" ") : `Erreur ${response.status}`;
-    throw new ApiError(response.status, message, problems.length ? problems : [message]);
+    const title = (data as { detail?: { message?: unknown } } | null)?.detail?.message;
+    throw new ApiError(
+      response.status,
+      message,
+      problems.length ? problems : [message],
+      typeof title === "string" ? title : "",
+    );
   }
   return data as T;
 }

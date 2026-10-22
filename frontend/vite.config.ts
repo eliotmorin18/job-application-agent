@@ -11,7 +11,13 @@ export default defineConfig({
     server: {
       // Local FastAPI backend (from the project root: uvicorn api.main:app --reload).
       // 127.0.0.1 rather than localhost: avoids IPv6 (::1) resolution while uvicorn listens on IPv4.
-      proxy: { "/api": { target: "http://127.0.0.1:8000", changeOrigin: true } },
+      // API_PROXY_TARGET points to another API (e.g. a test API with fictional CVs on another port).
+      proxy: {
+        "/api": {
+          target: process.env["API_PROXY_TARGET"] || "http://127.0.0.1:8000",
+          changeOrigin: true,
+        },
+      },
     },
   },
   tanstackStart: {
