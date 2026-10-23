@@ -16,14 +16,16 @@ calcule le score (cv/fit_score.py) et assemble le résultat. Rédigé en frança
       "strengths": [{"title", "explanation", "evidence", "requirement_ids"}],
       "weaknesses": [{"requirement_id", "text", "category", "kind", "explanation"}],
       "score": {"value", "level", "breakdown", "status_counts", "warnings", "explanation"},
-      "recommendations": [{"category", "text", "requirement_ids"}],
-      "interview_questions": [{"kind", "question", "purpose", "answer_guidance", "evidence",
-                               "topics_to_review", "requirement_ids"}],
+      "recommendations": [],
       "warnings": ["..."]
     }
 
-interview_questions (ajouté sans changer schema_version) : questions plausibles d'un recruteur,
-produites par le même appel à Claude. Absent des analyses enregistrées avant : lire avec .get().
+L'analyse ne prépare pas l'entretien : questions, conseils et recherche sur l'entreprise viennent
+de la préparation approfondie, à la demande (interview/preparation.py). Les analyses enregistrées
+avant cette séparation peuvent contenir "recommendations" (catégories cv, interview, learning,
+obstacle) et "interview_questions" : elles sont lues telles quelles (avec .get()), jamais réécrites,
+et la préparation réutilise leurs questions. Les nouvelles analyses gardent "recommendations": []
+pour que le format reste le même.
 
 En cas d'échec : {"schema_version": 1, "status": "failed", "generated_at", "error": {"message", "problems"}}.
 Une preuve est {"type": experience|project|education|skill|language, "id", "label", "justification"} :
@@ -49,11 +51,7 @@ SCHEMA_VERSION = 1
 ANALYSIS_FILE = "analysis.json"
 STATUSES = ["met", "partial", "not_documented", "missing"]
 EVIDENCE_TYPES = ["experience", "project", "education", "skill", "language"]
-RECOMMENDATION_CATEGORIES = ["cv", "interview", "learning", "obstacle"]
-QUESTION_KINDS = ["technical", "experience", "gap", "motivation"]
 MAX_PARTS = 6
-MAX_QUESTIONS = 8
-MAX_TOPICS = 6
 
 
 class AnalysisError(RuntimeError):
@@ -105,11 +103,6 @@ ANALYSIS_SCHEMA = _object(
             text=_TEXT, status={"type": "string", "enum": STATUSES},
             importance={"type": "string", "enum": list(IMPORTANCE_WEIGHTS)}, explanation=_TEXT, evidence=_EVIDENCE)})},
     strengths={"type": "array", "items": _object(title=_TEXT, explanation=_TEXT, evidence=_EVIDENCE, requirement_ids=_TEXTS)},
-    recommendations={"type": "array", "items": _object(
-        category={"type": "string", "enum": RECOMMENDATION_CATEGORIES}, text=_TEXT, requirement_ids=_TEXTS)},
-    interview_questions={"type": "array", "items": _object(
-        kind={"type": "string", "enum": QUESTION_KINDS}, question=_TEXT, purpose=_TEXT, answer_guidance=_TEXTS,
-        evidence=_EVIDENCE, topics_to_review=_TEXTS, requirement_ids=_TEXTS)},
 )
 
 ANALYSIS_PROMPT = """
@@ -160,35 +153,7 @@ Requirements: assess EVERY requirement of REQUIREMENTS, by its id. Do not add or
 Strengths: 3 to 5 strengths of the profile for this offer, each explaining why it matters for the
 job, with its evidence (ids from PROFILE REFERENCES) and the related requirement ids.
 
-Recommendations: 3 to 6 concrete and realistic recommendations, each with a category:
-- cv: what to highlight more in the CV (only things present in the profile);
-- interview: general advice to prepare the interview (the questions themselves go in interview_questions);
-- learning: skills or notions to deepen;
-- obstacle: possible obstacles to the application, stated honestly.
 Never invent or exaggerate the candidate's skills.
-
-Interview questions: 5 to 8 questions a recruiter COULD plausibly ask for THIS offer and THIS profile.
-They are possibilities to prepare, not a prediction of the real interview. No generic list: each
-question must be anchored in the offer (its missions, technologies, requirements) or in the profile.
-Vary the kinds, as relevant to the offer:
-- technical: on the job's technologies and methods named in the offer;
-- experience: on a specific experience, project or education of the profile relevant to the job
-  (evidence REQUIRED: the ids of the elements concerned);
-- gap: on a requirement that is partial, not_documented or missing (cite its id in requirement_ids).
-  Keep the distinction: for not_documented, the guidance says the profile is silent and that the
-  candidate should only mention real experience they actually have; for missing, the guidance
-  acknowledges the gap honestly and shows how to address it (learning, transferable experience).
-- motivation: on the motivation for the job, the company or the sector, or the understanding of the role.
-For each question:
-- question: worded naturally, as said in an interview ("tu" or "vous" as a recruiter would).
-- purpose: what the recruiter wants to assess, in one sentence.
-- answer_guidance: 2-4 short tips to build a good answer, relying ONLY on facts of the profile (with
-  their evidence) or on how to structure the answer. Never invent an experience, a result, a figure,
-  a skill or an achievement; never suggest claiming something the profile does not show.
-- evidence: the profile elements to mention in the answer (ids from PROFILE REFERENCES only); empty
-  if none is relevant.
-- topics_to_review: notions or technologies to revise before the interview (short items), possibly empty.
-- requirement_ids: the ids of the related requirements (from REQUIREMENTS), possibly empty.
 """.strip()
 
 
@@ -330,53 +295,6 @@ def _weaknesses(items: list[dict]) -> list[dict]:
              "kind": item["status"], "explanation": item["explanation"]} for item in weak]
 
 
-def _interview_questions(answers: list, references: dict, items: list[dict], warnings: list) -> list[dict]:
-    """
-    Questions d'entretien vérifiées : preuves limitées aux éléments du profil, exigences connues,
-    doublons et questions vides retirés, au plus MAX_QUESTIONS. Une question sur une expérience sans
-    preuve valide est retirée (elle porterait sur une expérience inexistante).
-    """
-    statuses = {item["id"]: item["status"] for item in items}
-    for item in items:                              # exigence séparée : le statut le moins favorable de ses parties
-        if item["parent_id"]:
-            current = statuses.get(item["parent_id"], "met")
-            statuses[item["parent_id"]] = max(current, item["status"], key=STATUSES.index)
-    questions, seen = [], set()
-    for answer in answers or []:
-        text = str(answer.get("question") or "").strip()
-        if not text or _norm(text) in seen:
-            continue
-        guidance = [str(tip).strip() for tip in answer.get("answer_guidance") or [] if str(tip).strip()]
-        if not guidance:
-            warnings.append(f"Question d'entretien ignorée (sans piste de réponse) : « {text} ».")
-            continue
-        evidence = _valid_evidence(answer.get("evidence"), references, warnings)
-        if answer.get("kind") == "experience" and not evidence:
-            warnings.append(f"Question d'entretien ignorée (expérience absente du profil) : « {text} ».")
-            continue
-        requirement_ids = [i for i in answer.get("requirement_ids") or [] if i in statuses]
-        if answer.get("kind") == "gap" and requirement_ids and all(statuses[i] == "met" for i in requirement_ids):
-            warnings.append(f"Question « {text} » : l'exigence liée est remplie, ce n'est pas une lacune.")
-        topics = []
-        for topic in answer.get("topics_to_review") or []:
-            topic = str(topic).strip()
-            if topic and _norm(topic) not in {_norm(t) for t in topics}:
-                topics.append(topic)
-        seen.add(_norm(text))
-        questions.append({
-            "kind": answer.get("kind") if answer.get("kind") in QUESTION_KINDS else "technical",
-            "question": text,
-            "purpose": str(answer.get("purpose") or "").strip(),
-            "answer_guidance": guidance,
-            "evidence": evidence,
-            "topics_to_review": topics[:MAX_TOPICS],
-            "requirement_ids": requirement_ids,
-        })
-    if len(questions) > MAX_QUESTIONS:
-        warnings.append(f"{len(questions) - MAX_QUESTIONS} question(s) d'entretien en trop ignorée(s).")
-    return questions[:MAX_QUESTIONS]
-
-
 def profile_fingerprint(profile: CandidateProfile) -> str:
     """Empreinte du profil (sans son contenu) : permet de savoir si le profil a changé depuis l'analyse."""
     return hashlib.sha256(profile.text.encode("utf-8")).hexdigest()[:16]
@@ -441,10 +359,7 @@ def analyze_fit(offer: dict, profile: CandidateProfile, document: dict | None = 
         "strengths": strengths,
         "weaknesses": _weaknesses(items),
         "score": compute_score(items),
-        "recommendations": [{"category": r["category"], "text": r["text"].strip(),
-                             "requirement_ids": [i for i in r["requirement_ids"] if i in known_ids]}
-                            for r in answer["recommendations"] if r["text"].strip()],
-        "interview_questions": _interview_questions(answer.get("interview_questions"), references, items, warnings),
+        "recommendations": [],                    # format inchangé ; la préparation est faite à part
         "warnings": warnings,
     }
 

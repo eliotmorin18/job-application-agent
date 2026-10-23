@@ -19,6 +19,7 @@ import { ConfirmDialog } from "@/features/candidate/components/common";
 import { ApiError, cvApi } from "@/services/api/cvApi";
 import { AnalysisTab } from "../components/AnalysisTab";
 import { CvEditorTab } from "../components/CvEditorTab";
+import { PreparationTab } from "../components/PreparationTab";
 import { applicationTitle, formatTimestamp } from "../format";
 import { cvListQuery, errorMessage, useCvList } from "../hooks";
 
@@ -192,10 +193,10 @@ export function CvDetailPage({ cvId, tab }: { cvId: string; tab: CvDetailTab }) 
         </TabsList>
 
         <TabsContent value="analyse" className="mt-6">
-          <AnalysisTab cv={cv} view="offre" />
+          <AnalysisTab cv={cv} />
         </TabsContent>
         <TabsContent value="preparation" className="mt-6">
-          <AnalysisTab cv={cv} view="preparation" />
+          <PreparationTab cv={cv} />
         </TabsContent>
         <TabsContent value="edition" className="mt-6">
           <CvEditorTab cv={cv} />

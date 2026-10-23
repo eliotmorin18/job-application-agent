@@ -1,6 +1,7 @@
 import sys
 
 from candidate.profile import ProfileError, load_profile
+from cv.build_cv import CvTooLongError
 from cv.document import selected_ids
 from cv.pipeline import MAX_CORRECTIONS, generate_from_url
 
@@ -45,8 +46,13 @@ def main(url: str) -> None:
         print(error)
         sys.exit(1)
 
-    result = generate_from_url(url, profile, on_step=_print_step)
-    cv, issues, pages = result.document, result.issues, result.pages
+    try:
+        result = generate_from_url(url, profile, on_step=_print_step)
+    except CvTooLongError as error:
+        print(f"\n{error}")
+        print(f"Dossier : {error.folder}")
+        sys.exit(1)
+    cv, issues = result.document, result.issues
 
     print()
     experience_ids, project_ids = selected_ids(cv)
@@ -66,8 +72,10 @@ def main(url: str) -> None:
         _print_issues(issues)
         print("!" * 70)
 
-    if pages > 1:
-        print(f"\nAttention : le CV fait {pages} pages au lieu d'une.")
+    if result.adjustments:
+        print("\nPour tenir sur une page :")
+        for adjustment in result.adjustments:
+            print(f"  - {adjustment}")
 
     analysis = result.analysis or {}
     if analysis.get("status") == "completed":

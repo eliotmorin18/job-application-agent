@@ -203,6 +203,89 @@ export interface FailedAnalysis {
 /** GET /api/cvs/{cv_id}/analysis (`running`: an analysis task is in progress for this CV). */
 export type CvAnalysis = (CompletedAnalysis | FailedAnalysis) & { running: boolean };
 
+// ---------- preparation.json (interview/preparation.py) ----------
+
+export type CompanyFactTopic =
+  "activity" | "products" | "clients" | "positioning" | "sector" | "competitors" | "news";
+
+/** A fact about the company: from the offer, or from a web page consulted during the research. */
+export interface CompanyFact {
+  id: string;
+  topic: CompanyFactTopic;
+  origin: "offer" | "web";
+  text: string;
+  interview_use: string;
+  source_ids: string[];
+}
+
+export interface CompanySource {
+  id: string;
+  url: string;
+  title: string;
+  /** The page belongs to the company's own website. */
+  official: boolean;
+  published_at: string | null;
+  accessed_at: string;
+  access: "fetched" | "search";
+}
+
+export interface PreparationQuestion extends InterviewQuestion {
+  id: string;
+  /** "analysis": reused unchanged from analysis.json; "preparation": written for the deep preparation. */
+  origin: "analysis" | "preparation";
+  fact_ids: string[];
+}
+
+export interface Preparation {
+  schema_version: number;
+  status: "completed";
+  generated_at: string;
+  profile_fingerprint: string;
+  analysis_generated_at: string | null;
+  company: {
+    name: string | null;
+    research_status: "done" | "ambiguous" | "not_found" | "skipped" | "unavailable";
+    official_website: string | null;
+    note: string;
+    facts: CompanyFact[];
+    sources: CompanySource[];
+    warnings: string[];
+  };
+  priorities: {
+    title: string;
+    why: string;
+    actions: string[];
+    requirement_ids: string[];
+    fact_ids: string[];
+  }[];
+  questions: PreparationQuestion[];
+  knowledge: {
+    topic: string;
+    why: string;
+    explanation: string;
+    check_points: string[];
+    requirement_ids: string[];
+  }[];
+  experiences: {
+    evidence: Pick<Evidence, "type" | "id" | "label">;
+    angle: string;
+    key_points: string[];
+    question_ids: string[];
+    requirement_ids: string[];
+  }[];
+  vigilance: {
+    /** Computed by the backend from the analysis statuses ("other": not tied to a requirement). */
+    kind: "missing" | "not_documented" | "partial" | "other";
+    requirement_ids: string[];
+    concern: string;
+    how_to_address: string[];
+  }[];
+  warnings: string[];
+}
+
+/** GET /api/cvs/{cv_id}/preparation (`running`: a preparation task is in progress for this CV). */
+export type CvPreparation = Preparation & { running: boolean };
+
 // ---------- layout.json (cv/layout.py) ----------
 
 export interface LayoutRegion {
@@ -231,7 +314,7 @@ export type TaskStatus = "pending" | "running" | "completed" | "failed";
 
 export interface CvTask {
   task_id: string;
-  kind: "generation" | "analysis";
+  kind: "generation" | "analysis" | "preparation";
   status: TaskStatus;
   /** Current step of cv/pipeline.py (read_offer, analyze_offer, write_cv, verify_cv, correct_cv, verified, compile, analyze_fit, done). */
   step: string;
@@ -259,6 +342,10 @@ export interface CvApi {
   deleteCv(id: string): Promise<void>;
   startGeneration(url: string): Promise<{ task_id: string }>;
   startAnalysis(id: string): Promise<{ task_id: string }>;
+  /** null when the application has no deep interview preparation yet (404). Never calls Claude. */
+  getPreparation(id: string): Promise<CvPreparation | null>;
+  /** Starts the deep preparation (once: 409 if it exists, is running, or lacks a completed analysis). */
+  startPreparation(id: string): Promise<{ task_id: string }>;
   getTask(taskId: string): Promise<CvTask>;
 }
 

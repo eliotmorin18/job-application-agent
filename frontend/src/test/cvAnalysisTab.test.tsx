@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AnalysisTab, type AnalysisView } from "@/features/cvs/components/AnalysisTab";
+import { AnalysisTab } from "@/features/cvs/components/AnalysisTab";
+import { InterviewQuestions } from "@/features/cvs/components/InterviewQuestions";
 import type { CompletedAnalysis } from "@/services/api/cvTypes";
 import { analysisFixture, summary, task } from "./fixtures/cvFixtures";
 
@@ -29,11 +30,11 @@ function fakeBackend(routes: Record<string, [number, unknown] | [number, unknown
   return calls;
 }
 
-function renderTab(cv = summary(), view: AnalysisView = "offre") {
+function renderTab(cv = summary()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AnalysisTab cv={cv} view={view} />
+      <AnalysisTab cv={cv} />
     </QueryClientProvider>,
   );
 }
@@ -110,13 +111,28 @@ describe("AnalysisTab", () => {
     expect(calls.length).toBe(requestsBefore);
   });
 
-  it("shows the preparation of the same analysis in its own tab, without the fit score", async () => {
-    fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysisFixture(), running: false }] });
-    const { container } = renderTab(summary(), "preparation");
-    expect(await screen.findByText("Préparer un exemple de pipeline.")).toBeVisible();
-    expect(screen.queryByText("Comprendre le poste")).not.toBeInTheDocument();
-    expect(screen.queryByText("Mes points forts")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Relancer l'analyse/ })).toBeInTheDocument();
+  it("never shows the interview advice or questions of older analyses", async () => {
+    const analysis: CompletedAnalysis = {
+      ...analysisFixture(),
+      interview_questions: [
+        {
+          kind: "motivation",
+          question: "Pourquoi ce poste de data engineer ?",
+          purpose: "Comprendre la motivation.",
+          answer_guidance: ["Partir des missions de l'offre."],
+          evidence: [],
+          topics_to_review: [],
+          requirement_ids: [],
+        },
+      ],
+    };
+    fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysis, running: false }] });
+    const { container } = renderTab();
+    await openSections("Comprendre le poste", "Mes points forts", "Mes points faibles");
+    expect(screen.getByText("Python en production")).toBeInTheDocument();
+    expect(screen.queryByText("Préparer un exemple de pipeline.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pourquoi ce poste de data engineer ?")).not.toBeInTheDocument();
+    expect(screen.queryByText("Préparer ma candidature")).not.toBeInTheDocument();
     expect(container.textContent).not.toMatch(/73|score|adéquation\s*:/i);
   });
 
@@ -134,7 +150,7 @@ describe("AnalysisTab", () => {
       { category: "obstacle", text: "Stage de 6 mois obligatoire.", requirement_ids: [] },
     ];
     fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysis, running: false }] });
-    const { unmount } = renderTab();
+    renderTab();
     await openSections("Comprendre le poste", "Mes points forts", "Mes points faibles");
 
     // Inside « Comprendre le poste »: missions open by default, the other parts folded (with a chevron trigger)
@@ -163,17 +179,7 @@ describe("AnalysisTab", () => {
       "false",
     );
     expect(screen.queryByText("Préparer ma candidature")).not.toBeInTheDocument();
-    unmount();
-
-    // « Préparation à l'entretien »: « Préparer ma candidature » without the "cv" recommendations
-    renderTab(summary(), "preparation");
-    expect(await screen.findByText("Préparer ma candidature")).toBeInTheDocument();
-    expect(screen.getByText("Préparer un exemple de pipeline.")).toBeVisible();
-    expect(screen.getByText("Suivre un tutoriel Kafka.")).toBeVisible();
-    expect(screen.getByText("Stage de 6 mois obligatoire.")).toBeVisible();
-    expect(screen.queryByText("Mettre Kafka en avant dans le CV.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Améliorer le CV")).not.toBeInTheDocument();
-    expect(screen.queryByText("Concevoir des flux de données")).not.toBeInTheDocument();
+    expect(screen.queryByText("Stage de 6 mois obligatoire.")).not.toBeInTheDocument();
   });
 
   it("handles an analysis without strengths, weaknesses or shown recommendations", async () => {
@@ -184,16 +190,10 @@ describe("AnalysisTab", () => {
       { category: "cv", text: "Seulement pour le CV.", requirement_ids: [] },
     ];
     fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysis, running: false }] });
-    const { unmount } = renderTab();
+    renderTab();
     await openSections("Mes points forts", "Mes points faibles");
     expect(screen.getByText(/Aucun point fort/)).toBeInTheDocument();
     expect(screen.getByText(/Aucun point faible/)).toBeInTheDocument();
-    expect(screen.queryByText("Seulement pour le CV.")).not.toBeInTheDocument();
-    unmount();
-
-    renderTab(summary(), "preparation");
-    expect(await screen.findByText("Aucun conseil de préparation")).toBeInTheDocument();
-    expect(screen.queryByText("Préparer ma candidature")).not.toBeInTheDocument();
     expect(screen.queryByText("Seulement pour le CV.")).not.toBeInTheDocument();
   });
 
@@ -221,19 +221,9 @@ describe("AnalysisTab", () => {
     expect(screen.getAllByRole("button", { name: "Lire la suite" })).toHaveLength(1);
   });
 
-  it("keeps working with an analysis saved before the interview questions", async () => {
-    const analysis = analysisFixture();
-    expect(analysis.interview_questions).toBeUndefined();
-    fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysis, running: false }] });
-    renderTab(summary(), "preparation");
-    expect(await screen.findByText("Préparer un exemple de pipeline.")).toBeVisible();
-    expect(screen.queryByText("Questions possibles")).not.toBeInTheDocument();
-  });
-
   it("shows the interview questions folded, with their details on click", async () => {
     const analysis: CompletedAnalysis = {
       ...analysisFixture(),
-      recommendations: [],
       interview_questions: [
         {
           kind: "gap",
@@ -260,10 +250,15 @@ describe("AnalysisTab", () => {
         },
       ],
     };
-    fakeBackend({ [`GET ${ANALYSIS}`]: [200, { ...analysis, running: false }] });
-    renderTab(summary(), "preparation");
+    // Component shared with the deep preparation (PreparationTab)
+    render(
+      <InterviewQuestions
+        questions={analysis.interview_questions!}
+        requirements={analysis.requirements}
+      />,
+    );
 
-    // The block exists even without "interview" recommendations; questions are visible, details folded
+    // Questions are visible, details folded
     expect(await screen.findByText("Questions possibles")).toBeVisible();
     expect(screen.getByText(/le recruteur ne les posera pas forcément/)).toBeVisible();
     const question = screen.getByRole("button", {
@@ -308,18 +303,6 @@ describe("AnalysisTab", () => {
     expect(screen.getByText("Construire des pipelines de données fictifs.")).toBeInTheDocument();
     expect(calls).toContain(`POST ${ANALYSIS}`);
     expect(calls).toContain("GET /api/cvs/tasks/t9");
-  });
-
-  it("offers the same launch in the preparation tab when there is no analysis", async () => {
-    fakeBackend({
-      [`GET ${ANALYSIS}`]: [
-        404,
-        { detail: { message: "Analyse non disponible", problems: ["aucune"] } },
-      ],
-    });
-    renderTab(summary({ analysis_status: "missing" }), "preparation");
-    expect(await screen.findByText("Analyse non effectuée")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Analyser cette candidature/ })).toBeEnabled();
   });
 
   it("shows a failed analysis with its message and a relaunch button", async () => {

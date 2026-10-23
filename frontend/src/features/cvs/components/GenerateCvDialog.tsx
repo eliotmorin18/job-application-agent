@@ -31,13 +31,13 @@ import { cvListQuery, errorMessage, useCvTask } from "../hooks";
 /** Notes about a finished generation, from the task result (the fit score is deliberately not shown). */
 function resultNotes(task: CvTask): string[] {
   const result = (task.result ?? {}) as {
-    pages?: number;
+    page_adjustments?: string[];
     verification_issues?: number;
     analysis_status?: string;
   };
   const notes: string[] = [];
-  if (result.pages && result.pages > 1)
-    notes.push(`Le CV fait ${result.pages} pages : vous pouvez le raccourcir dans l'éditeur.`);
+  if (result.page_adjustments?.length)
+    notes.push(`Pour tenir sur une page : ${result.page_adjustments.join(" ")}`);
   if (result.verification_issues)
     notes.push(
       `${result.verification_issues} point${result.verification_issues > 1 ? "s" : ""} signalé${result.verification_issues > 1 ? "s" : ""} par la vérification : relisez le CV avant de l'envoyer.`,

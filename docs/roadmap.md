@@ -13,8 +13,15 @@ State on branch `refactor/mvp-cv`. How the implemented parts work: [architecture
   (« Offre et adéquation », « Préparation à l'entretien », « CV » with the editor and PDF
   recompilation), CV download, deletion, real creation dates for new applications. Interface only:
   one application is still one CV folder.
-- **Fit analysis**: offer explained, requirements rated with verified evidence, strengths,
-  weaknesses, recommendations and possible interview questions (score computed but not shown).
+- **Fit analysis**: offer explained, requirements rated with verified evidence, strengths and
+  weaknesses (score computed but not shown). Interview content comes only from the deep preparation.
+- **One-page CV**: real page count of the PDF; a longer CV is shortened by removing its least
+  relevant content (no Claude call), otherwise the generation fails; editor changes that would
+  create a second page are refused.
+- **Deep interview preparation** (on demand, saved once in `preparation.json`): company understood
+  from the offer and sourced web research, priorities, likely questions (existing ones reused),
+  knowledge to deepen, real experiences to prepare, points of vigilance. At most two Claude calls,
+  with the claude.ai subscription only.
 
 ## Validated decisions
 
@@ -30,6 +37,8 @@ State on branch `refactor/mvp-cv`. How the implemented parts work: [architecture
   themselves. Automating submission is only a possibility, not decided.
 - **One offer at a time**, chosen by the user; never bulk applications.
 - **Profile as the only source of facts**; the fit score is not displayed.
+- **Claude Code subscription only** for the V0: no API key, no API billing, never `--bare`. New AI
+  features go through `llm/structured.py` so that other providers can be added later.
 
 ## Next steps
 
@@ -51,7 +60,7 @@ State on branch `refactor/mvp-cv`. How the implemented parts work: [architecture
 
 - Cover letters generated from the profile and the offer.
 - Profile enrichment from GitHub or LinkedIn.
-- Interview preparation beyond the current questions (dedicated page, simulation, audio).
+- Interview preparation beyond the deep preparation (regeneration, simulation, audio).
 - Explaining why each experience or project was selected; AI-assisted CV editing.
 - A « Paramètres » section.
 - Filling or submitting applications automatically (an older prototype exists on `main`).

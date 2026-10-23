@@ -143,11 +143,8 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
       setDraft(structuredClone(result.document));
       setSelection((current) => translate(current, draft, result.document));
       void qc.invalidateQueries({ queryKey: cvListQuery.queryKey, exact: true });
-      toast.success("CV enregistré — le PDF a été recompilé.", {
-        description: result.fits_one_page
-          ? undefined
-          : `Attention : le CV fait maintenant ${result.pages} pages.`,
-      });
+      // A version longer than one page is refused by the backend (422): the previous PDF is kept.
+      toast.success("CV enregistré — le PDF a été recompilé.");
     } catch (e) {
       if (e instanceof ApiError && e.status === 404)
         toast.error("Ce CV n'existe plus : il a peut-être été supprimé.");

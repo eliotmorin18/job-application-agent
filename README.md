@@ -21,7 +21,7 @@ What works today:
 - **List the requirements of the offer that your profile does not cover**, so you know your gaps.
 - **Manage the candidate profile from a local web interface**: view, add, edit and delete experiences, education, projects, skills, languages, interests, contact details, career status and preferences.
 - **Import an existing CV (PDF)**: Claude extracts a proposal, which is compared with the profile (duplicates, uncertain fields); you choose what to add, update or skip, and can correct any extracted value, before anything is saved.
-- **« Mes candidatures » in the web interface**: prepare an application from an offer URL and follow its steps, list the applications (job title, company, date), and on each application read the offer/profile match analysis, prepare the interview (advice, possible questions), edit the CV (content, order, entries added from the profile) with PDF recompilation and clickable zones, download it, or delete the application. For now an application is one generated CV folder.
+- **« Mes candidatures » in the web interface**: prepare an application from an offer URL and follow its steps, list the applications (job title, company, date), and on each application read the offer/profile match analysis, prepare the interview (advice, possible questions, and on demand a deep preparation: company with sourced facts, priorities, likely questions, knowledge to deepen, experiences to tell, points of vigilance), edit the CV (content, order, entries added from the profile) with PDF recompilation and clickable zones, download it, or delete the application. For now an application is one generated CV folder.
 
 ## How it works
 
@@ -182,8 +182,10 @@ job-application-agent/
 │   ├── template/               # LaTeX template (main.tex + sections/)
 │   ├── reference/              # optional style references (local, ignored by Git)
 │   └── applications/           # generated CVs (local, ignored by Git)
+├── interview/                  # deep interview preparation (company research, preparation)
 ├── llm/                        # shared tools to call Claude
-│   └── claude_cli.py           # calls `claude -p` with a JSON schema
+│   ├── claude_cli.py           # calls `claude -p` with a JSON schema (claude.ai subscription only)
+│   └── structured.py           # provider-neutral facade for new AI features
 ├── profile/
 │   ├── candidate.example.yaml  # profile template
 │   └── private/                # your real profile (local, ignored by Git)

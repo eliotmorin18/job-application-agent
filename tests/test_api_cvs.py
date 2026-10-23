@@ -27,6 +27,7 @@ from cv.analysis import failed_analysis, load_analysis, save_analysis
 from cv.build_cv import ROOT, rebuild_cv, write_cv
 from cv.document import build_document, entry_from_profile
 from cv.pipeline import GenerationResult
+from interview.preparation import PREPARATION_FILE, prepare_folder
 from cv_fixtures import fake_draft
 from jobs.url_check import UnsafeUrlError, check_public_url
 from test_import_cv import sha
@@ -189,11 +190,34 @@ class GenerationTest(ApiCvTestCase):
         self.assertEqual(task["status"], "completed", task)
         self.assertEqual((task["step"], task["error"]), ("done", None))
         self.assertEqual(task["result"], {"pages": 1, "fits_one_page": True, "verification_issues": 0, "gaps": 1,
-                                          "analysis_status": "completed", "fit_score": 72})
+                                          "page_adjustments": [], "analysis_status": "completed", "fit_score": 72})
         self.assertEqual(self.generator_calls, ["https://jobs.example.com/offre/42"])
         cv = self.client.get(f"/api/cvs/{task['cv_id']}").json()
         self.assertEqual(cv["document"]["header"]["name"], "John Doe")
         self.assertEqual(cv["cv"]["source_url"], "https://jobs.example.com/offre/42")
+
+    def test_a_cv_longer_than_one_page_is_never_a_success(self):
+        from cv.build_cv import CvTooLongError
+
+        def too_long(url, profile, on_step=None, applications_dir=None):
+            result = self.fake_generator(url, profile, on_step, applications_dir)
+            raise CvTooLongError(result.folder, 2, ["Projet retiré."])
+
+        def two_pages(url, profile, on_step=None, applications_dir=None):
+            result = self.fake_generator(url, profile, on_step, applications_dir)
+            result.pages = 2
+            return result
+
+        for generator in (too_long, two_pages):
+            with self.subTest(generator.__name__):
+                main.app.dependency_overrides[cvs.cv_generator] = lambda: generator
+                task = wait_for(self.client, self.client.post("/api/cvs/generate",
+                                                              json={"url": "https://jobs.example.com/9"}).json()["task_id"])
+                self.assertEqual(task["status"], "failed")
+                self.assertEqual(task["error"]["message"], "Le CV ne tient pas sur une page")
+                self.assertIn("raccourcis-le dans l'éditeur", task["error"]["problems"][0])
+                self.assertNotIn(str(ROOT), json.dumps(task))
+                self.assertTrue((self.applications / task["cv_id"] / "cv.json").exists())
 
     def test_status_while_running_and_queue(self):
         started, release = threading.Event(), threading.Event()
@@ -348,11 +372,14 @@ class UpdateTest(ApiCvTestCase):
         self.assertEqual(self.rebuilds, [self.cv_folder.resolve()])
         self.assertEqual(sha(self.profile_path), sha(EXAMPLE_PATH))                    # le profil ne change pas
 
-    def test_more_than_one_page_is_reported(self):
+    def test_an_edit_making_two_pages_is_refused_and_the_previous_cv_kept(self):
+        before = self.files()
         self.doc["experiences"][0]["bullets"] *= 6
-        body = self.client.put(f"/api/cvs/{self.cv_id}", json=self.doc).json()
-        self.assertEqual((body["pages"], body["fits_one_page"]), (2, False))
-        self.assertFalse(self.client.get("/api/cvs").json()[0]["fits_one_page"])
+        detail = self.assertProblem(self.client.put(f"/api/cvs/{self.cv_id}", json=self.doc), 422,
+                                    "doit tenir sur une page")
+        self.assertIn("2 pages", " ".join(detail["problems"]))
+        self.assertEqual(self.files(), before)                       # cv.json, sections, PDF et zones d'avant
+        self.assertTrue(self.client.get("/api/cvs").json()[0]["fits_one_page"])
 
     def test_invalid_documents_change_nothing(self):
         before = self.files()
@@ -707,6 +734,98 @@ class CompatibilityTest(ApiCvTestCase):
         self.assertEqual(self.client.get("/api/profile").json()["personal"]["first_name"], "John")
         self.assertEqual(self.client.post("/api/interests", json={"interest": "Chess"}).status_code, 201)
         self.assertEqual(self.client.get("/api/imports").status_code, 200)
+
+
+class PreparationRoutesTest(ApiCvTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.cv_id = self.new_cv()
+        self.preparations = []
+        main.app.dependency_overrides[cvs.cv_preparer] = lambda: self.fake_preparer
+
+    def fake_preparer(self, folder, profile, on_step=None):
+        """Préparation fictive enregistrée comme la vraie (interview/preparation.prepare_folder), sans Claude."""
+        self.preparations.append(Path(folder).name)
+        on_step("research_company")
+        on_step("write_preparation")
+        preparation = {"schema_version": 1, "status": "completed", "generated_at": "2026-10-22T11:00:00",
+                       "company": {"name": "Acme Robotics", "research_status": "done", "facts": [], "sources": [],
+                                   "warnings": [f"Échec dans {ROOT}/llm"]},
+                       "priorities": [], "questions": [{"id": "q1"}], "knowledge": [], "experiences": [],
+                       "vigilance": [], "warnings": []}
+        (Path(folder) / PREPARATION_FILE).write_text(json.dumps(preparation), encoding="utf-8")
+        return preparation
+
+    def test_preparation_is_generated_once_then_read_without_claude(self):
+        self.assertProblem(self.client.get(f"/api/cvs/{self.cv_id}/preparation"), 404, "Préparation non disponible")
+        response = self.client.post(f"/api/cvs/{self.cv_id}/preparation")
+        self.assertEqual(response.status_code, 202)
+        task = wait_for(self.client, response.json()["task_id"])
+        self.assertEqual((task["status"], task["kind"], task["cv_id"]), ("completed", "preparation", self.cv_id))
+        self.assertEqual(task["result"], {"questions": 1, "research_status": "done"})
+
+        for _ in range(3):                                                   # rouvrir l'onglet : aucun appel
+            preparation = self.client.get(f"/api/cvs/{self.cv_id}/preparation").json()
+        self.assertEqual((preparation["status"], preparation["running"]), ("completed", False))
+        self.assertNotIn(str(ROOT), json.dumps(preparation))
+        self.assertEqual(self.preparations, [self.cv_id])
+        self.assertProblem(self.client.post(f"/api/cvs/{self.cv_id}/preparation"), 409, "déjà enregistrée")
+        self.assertEqual(self.preparations, [self.cv_id])
+
+    def test_refused_without_offer_or_completed_analysis(self):
+        folder = self.applications / self.cv_id
+        save_analysis(folder, failed_analysis("L'analyse a échoué", ["x"]))
+        self.assertProblem(self.client.post(f"/api/cvs/{self.cv_id}/preparation"), 409, "analyse d'adéquation")
+        (folder / "analysis.json").unlink()
+        self.assertProblem(self.client.post(f"/api/cvs/{self.cv_id}/preparation"), 409, "lance-la d'abord")
+        legacy = self.legacy_cv()                                            # ancienne candidature, sans analyse
+        self.assertProblem(self.client.post(f"/api/cvs/{legacy}/preparation"), 409, "Préparation impossible")
+        self.assertProblem(self.client.get(f"/api/cvs/{legacy}/preparation"), 404, "Préparation non disponible")
+        self.assertProblem(self.client.post("/api/cvs/inexistant/preparation"), 404, "CV introuvable")
+        self.assertEqual(self.preparations, [])
+
+    def test_failure_keeps_the_application_unchanged(self):
+        folder = self.applications / self.cv_id
+        before = {p.name: sha(p) for p in folder.rglob("*") if p.is_file()}
+
+        def broken(folder, profile, on_step=None):
+            raise RuntimeError(f"Claude n'a pas répondu ({ROOT}/x).")
+        main.app.dependency_overrides[cvs.cv_preparer] = lambda: broken
+        task = wait_for(self.client, self.client.post(f"/api/cvs/{self.cv_id}/preparation").json()["task_id"])
+        self.assertEqual((task["status"], task["error"]["message"]), ("failed", "La préparation a échoué"))
+        self.assertNotIn(str(ROOT), json.dumps(task))
+        self.assertEqual({p.name: sha(p) for p in folder.rglob("*") if p.is_file()}, before)
+        self.assertEqual(self.client.post(f"/api/cvs/{self.cv_id}/preparation").status_code, 202)   # nouvel essai
+
+    def test_one_preparation_at_a_time_and_no_deletion_meanwhile(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow(folder, profile, on_step=None):
+            started.set()
+            release.wait(5)
+            return self.fake_preparer(folder, profile, on_step)
+
+        main.app.dependency_overrides[cvs.cv_preparer] = lambda: slow
+        task_id = self.client.post(f"/api/cvs/{self.cv_id}/preparation").json()["task_id"]
+        self.assertTrue(started.wait(5))
+        self.assertProblem(self.client.post(f"/api/cvs/{self.cv_id}/preparation"), 409, "déjà en cours")
+        self.assertProblem(self.client.delete(f"/api/cvs/{self.cv_id}"), 409, "Suppression impossible")
+        release.set()
+        self.assertEqual(wait_for(self.client, task_id)["status"], "completed")
+
+    def test_real_preparation_module_with_a_simulated_model(self):
+        from test_preparation import fake_generate                          # modèle simulé, aucun appel réel
+        calls = []
+        main.app.dependency_overrides[cvs.cv_preparer] = lambda: (
+            lambda folder, profile, on_step=None: prepare_folder(folder, profile, on_step=on_step,
+                                                                 generate=fake_generate(calls=calls)))
+        task = wait_for(self.client, self.client.post(f"/api/cvs/{self.cv_id}/preparation").json()["task_id"])
+        self.assertEqual(task["status"], "completed", task)
+        self.assertEqual(len(calls), 2)
+        preparation = self.client.get(f"/api/cvs/{self.cv_id}/preparation").json()
+        self.assertEqual(preparation["company"]["name"], "Acme Robotics")
+        self.assertTrue((self.applications / self.cv_id / "company_research.json").exists())
 
 
 if __name__ == "__main__":

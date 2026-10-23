@@ -62,11 +62,16 @@ Selection:
 Writing:
 - Write the CV in the language of the job offer (French offer -> French CV, otherwise English),
   and set language accordingly. Section titles are added by the application.
-- The "Profile" summary must be written specifically for this offer (2-3 sentences).
+- The "Profile" summary must be written specifically for this offer (2-3 sentences, at most
+  about 350 characters).
 - Technical skills: put first what matches the offer; the spoken languages go in languages.
 - Interests: 3 to 5 items from the profile, taken in the order of the profile list
   (the first ones are the candidate's priority).
+- Education: only the entries useful for this offer (usually the main degree and at most one
+  other); 1 or 2 bullets for the main degree, 1 for the others.
 - The whole CV must fit on ONE page: keep bullets short (1-2 lines), 1 to 3 bullets per item.
+- Order every list (experiences, education, projects, bullets) from the most to the least
+  relevant to the offer: if the CV is still too long, the application removes the last items.
 
 Format:
 - Plain text only: no LaTeX, no HTML, no Markdown, except **bold** around a few words.

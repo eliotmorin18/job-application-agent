@@ -266,7 +266,7 @@ class PipelineIntegrationTest(unittest.TestCase):
              mock.patch.object(pipeline, "generate_cv", return_value=doc), \
              mock.patch.object(pipeline, "verify_cv", side_effect=[issues, []]), \
              mock.patch.object(pipeline, "write_cv", return_value=Path("cv/applications/x/x.tex")) as write, \
-             mock.patch.object(pipeline, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 2)), \
+             mock.patch.object(pipeline, "compile_cv", return_value=(Path("cv/applications/x/build/x.pdf"), 1)), \
              mock.patch.object(pipeline, "analyze_folder", return_value={"status": "completed",
                                                                         "score": {"value": 72, "level": "Bonne adéquation"}}), \
              mock.patch("builtins.print", side_effect=lambda *a: printed.append(" ".join(map(str, a)))):
@@ -288,7 +288,6 @@ class PipelineIntegrationTest(unittest.TestCase):
             "Projets choisis      : multi-agent-system, face-recognition",
             "Points de l'offre non couverts par ton profil :",
             "  - Pas d'expérience en robotique industrielle.",
-            "\nAttention : le CV fait 2 pages au lieu d'une.",
             "\nAdéquation avec l'offre : 72/100 (Bonne adéquation) — détail dans cv/applications/x/analysis.json",
             "\nCV généré : cv/applications/x/build/x.pdf",
         ])

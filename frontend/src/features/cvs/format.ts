@@ -31,3 +31,27 @@ export function taskText(text: string): string {
   if (!rest || rest === text.trim()) return text.trim();
   return rest.charAt(0).toLocaleUpperCase("fr-FR") + rest.slice(1);
 }
+
+const SHORT_MONTHS = [
+  "janv.",
+  "févr.",
+  "mars",
+  "avr.",
+  "mai",
+  "juin",
+  "juil.",
+  "août",
+  "sept.",
+  "oct.",
+  "nov.",
+  "déc.",
+];
+
+/** "2026-03" -> "mars 2026", "2026-03-13" -> "13 mars 2026". */
+export function sourceDate(value: string | null): string | null {
+  const match = value?.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+  if (!match) return null;
+  const month = SHORT_MONTHS[Number(match[2]) - 1];
+  if (!month) return null;
+  return [match[3] ? String(Number(match[3])) : null, month, match[1]].filter(Boolean).join(" ");
+}

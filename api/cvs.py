@@ -1,7 +1,8 @@
 """
 Routes « Mes CV » : génération à partir de l'URL d'une offre (tâche en arrière-plan),
 liste, lecture, PDF, zones cliquables, modification et suppression d'un CV, et analyse de
-correspondance offre / profil (analysis.json : lue telle quelle, relancée seulement sur demande).
+correspondance offre / profil (analysis.json : lue telle quelle, relancée seulement sur demande),
+et préparation approfondie à l'entretien (preparation.json : générée une seule fois, à la demande).
 
 Un CV est désigné par le nom de son dossier dans cv/applications/ (ex. « acme-stage-ia »),
 vérifié strictement : aucun chemin fourni par le frontend n'est utilisé tel quel.
@@ -28,11 +29,12 @@ from api.common import ApiError, profile_path
 from candidate.profile import ProfileError, load_profile
 from cv import build_cv
 from cv.analysis import analyze_folder, load_analysis
-from cv.build_cv import ROOT, _count_pages, rebuild_cv
+from cv.build_cv import ROOT, CvTooLongError, _count_pages, rebuild_cv
 from cv.document import DOCUMENT_FILE, CVDocumentError, load_document, save_document, validate_document
 from cv.layout import LAYOUT_FILE
 from cv.metadata import cv_dates, mark_updated
 from cv.pipeline import STEPS, generate_from_url
+from interview.preparation import PreparationError, check_preparable, load_preparation, prepare_folder
 from jobs.url_check import UnsafeUrlError, check_public_url
 
 
@@ -41,6 +43,7 @@ router = APIRouter(prefix="/api/cvs")
 CV_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,150}$")
 TASK_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 MAX_TASKS = 50
+PREPARATION_STEPS = {"research_company": "Recherche sur l'entreprise", "write_preparation": "Rédaction de la préparation"}
 
 
 # ---------- Ce qui est remplacé dans les tests ----------
@@ -68,6 +71,11 @@ def cv_analyzer():
     return analyze_folder
 
 
+def cv_preparer():
+    """La préparation à l'entretien (interview/preparation.py) ; remplacée par un faux dans les tests (pas de Claude)."""
+    return prepare_folder
+
+
 # ---------- Messages d'erreur lisibles et sans chemin du serveur ----------
 
 # Chemin absolu (pas « ./sections/x.tex », utile dans les erreurs LaTeX) : réduit à son dernier élément
@@ -82,6 +90,8 @@ def _clean(text) -> str:
 
 
 def _error_detail(error: Exception) -> dict:
+    if isinstance(error, CvTooLongError):
+        return {"message": "Le CV ne tient pas sur une page", "problems": [_clean(error)]}
     if isinstance(error, ProfileError):
         return {"message": "Profil candidat invalide", "problems": [_clean(p) for p in error.problems]}
     if isinstance(error, CVDocumentError):
@@ -120,13 +130,14 @@ class TaskStore:
         with self._lock:
             self._tasks[task_id].update(fields, updated_at=time.time())
 
-    def analysis_in_progress(self, cv_id: str) -> bool:
+    def analysis_in_progress(self, cv_id: str, kind: str = "analysis") -> bool:
+        """Une tâche de ce type (analyse par défaut, ou préparation) vise ce CV et n'est pas terminée."""
         with self._lock:
-            return any(t["kind"] == "analysis" and t["cv_id"] == cv_id and t["status"] in ("pending", "running")
+            return any(t["kind"] == kind and t["cv_id"] == cv_id and t["status"] in ("pending", "running")
                        for t in self._tasks.values())
 
     def active_for(self, cv_id: str) -> bool:
-        """Une génération ou une analyse en attente ou en cours vise ce CV."""
+        """Une génération, une analyse ou une préparation en attente ou en cours vise ce CV."""
         with self._lock:
             return any(t["cv_id"] == cv_id and t["status"] in ("pending", "running") for t in self._tasks.values())
 
@@ -179,12 +190,19 @@ def _run_generation(task_id: str, url: str, profile, generator, folder: Path) ->
     try:
         result = generator(url, profile, on_step=on_step, applications_dir=folder)
     except Exception as error:                      # l'erreur est rendue lisible, jamais affichée telle quelle
-        TASKS.update(task_id, status="failed", error=_error_detail(error))
+        cv_id = error.folder.name if isinstance(error, CvTooLongError) else None
+        TASKS.update(task_id, status="failed", error=_error_detail(error),
+                     **({"cv_id": cv_id} if cv_id else {}))
     else:
+        if result.pages != 1:                       # jamais de succès au-delà d'une page
+            TASKS.update(task_id, status="failed", cv_id=result.folder.name,
+                         error=_error_detail(CvTooLongError(result.folder, result.pages, [])))
+            return
         analysis = result.analysis or {}
         TASKS.update(task_id, status="completed", step="done", step_label="Terminé", cv_id=result.folder.name,
-                     result={"pages": result.pages, "fits_one_page": result.pages == 1,
+                     result={"pages": result.pages, "fits_one_page": True,
                              "verification_issues": len(result.issues), "gaps": len(result.document["gaps"]),
+                             "page_adjustments": list(result.adjustments or []),
                              "analysis_status": analysis.get("status", "missing"),
                              "fit_score": (analysis.get("score") or {}).get("value")})
     finally:
@@ -349,7 +367,8 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
               base: Path = Depends(applications_dir), rebuilder=Depends(cv_rebuilder)):
     """
     Enregistre le CV modifié et recompile le PDF. Le document est validé avant toute écriture ;
-    si la compilation échoue, cv.json, les sections, le PDF et layout.json précédents sont restaurés.
+    si la compilation échoue ou si le PDF dépasse une page, cv.json, les sections, le PDF et
+    layout.json précédents sont restaurés (422).
     """
     folder = _cv_folder(cv_id, base)
     if not (folder / DOCUMENT_FILE).is_file():
@@ -371,10 +390,7 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
                 target.parent.mkdir(parents=True, exist_ok=True)
                 (shutil.copytree if item.is_dir() else shutil.copy2)(item, target)
 
-        save_document(folder, doc)
-        try:
-            pdf, pages = rebuilder(folder)
-        except Exception as error:
+        def restore() -> None:
             for item in kept:                       # retour à la dernière version valide
                 saved = backup / item.relative_to(folder)
                 if item.is_dir():
@@ -383,8 +399,19 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
                     item.unlink()
                 if saved.exists():
                     (shutil.copytree if saved.is_dir() else shutil.copy2)(saved, item)
+
+        save_document(folder, doc)
+        try:
+            pdf, pages = rebuilder(folder)
+        except Exception as error:
+            restore()
             problems = [_clean(error)] if isinstance(error, RuntimeError) else [type(error).__name__]
             raise ApiError(422, "La compilation a échoué : la version précédente du CV a été conservée.", problems)
+        if pages != 1:
+            restore()
+            count = f"{pages} pages" if pages else "un nombre de pages inconnu"
+            raise ApiError(422, "Le CV doit tenir sur une page : la version précédente du CV a été conservée.",
+                           [f"avec cette modification, le PDF ferait {count}. Raccourcis ou retire du contenu."])
         mark_updated(folder)
         return {"cv": _summary(folder), "document": load_document(folder), "pages": pages, "fits_one_page": pages == 1,
                 "has_layout": (folder / "build" / LAYOUT_FILE).is_file()}
@@ -441,6 +468,69 @@ def request_analysis(cv_id: str, path: Path = Depends(profile_path), base: Path 
     return {"task_id": task["task_id"], "status": task["status"]}
 
 
+# ---------- Préparation approfondie à l'entretien ----------
+
+def _run_preparation(task_id: str, folder: Path, profile, preparer) -> None:
+    def on_step(step: str) -> None:
+        TASKS.update(task_id, step=step, step_label=PREPARATION_STEPS.get(step, step))
+
+    TASKS.update(task_id, status="running")
+    try:
+        preparation = preparer(folder, profile, on_step=on_step)
+    except Exception as error:                      # rien n'est enregistré : l'état précédent reste en place
+        detail = _error_detail(error)
+        if isinstance(error, PreparationError):
+            detail = {"message": "Préparation impossible", "problems": [_clean(error)]}
+        elif isinstance(error, RuntimeError):
+            detail = {**detail, "message": "La préparation a échoué"}
+        TASKS.update(task_id, status="failed", error=detail)
+    else:
+        TASKS.update(task_id, status="completed", step="done", step_label="Terminé",
+                     result={"questions": len(preparation.get("questions") or []),
+                             "research_status": (preparation.get("company") or {}).get("research_status")})
+
+
+def _clean_texts(values) -> list[str]:
+    return [_clean(value) for value in values or []]
+
+
+@router.get("/{cv_id}/preparation")
+def read_preparation(cv_id: str, base: Path = Depends(applications_dir)):
+    """La préparation enregistrée. Ne lance jamais Claude : voir POST pour la générer (une seule fois)."""
+    folder = _cv_folder(cv_id, base)
+    preparation = load_preparation(folder)
+    if preparation is None:
+        raise ApiError(404, "Préparation non disponible",
+                       ["aucune préparation pour cette candidature : demande-la avec POST /api/cvs/{cv_id}/preparation."])
+    company = preparation.get("company") or {}
+    return {**preparation, "warnings": _clean_texts(preparation.get("warnings")),
+            "company": {**company, "warnings": _clean_texts(company.get("warnings"))},
+            "running": TASKS.analysis_in_progress(folder.name, kind="preparation")}
+
+
+@router.post("/{cv_id}/preparation", status_code=202)
+def request_preparation(cv_id: str, path: Path = Depends(profile_path), base: Path = Depends(applications_dir),
+                        preparer=Depends(cv_preparer)):
+    """
+    Lance la préparation approfondie en arrière-plan (recherche sur l'entreprise puis préparation
+    personnalisée, deux appels au plus). Refusée si elle existe déjà (pas de régénération), si elle
+    est en cours, ou sans offre ni analyse terminée. -> {"task_id", "status"}
+    """
+    folder = _cv_folder(cv_id, base)
+    if load_preparation(folder) is not None:
+        raise ApiError(409, "Préparation déjà enregistrée", ["la préparation de cette candidature existe déjà."])
+    if TASKS.analysis_in_progress(cv_id, kind="preparation"):
+        raise ApiError(409, "Préparation déjà en cours", ["une préparation de cette candidature est déjà en cours."])
+    try:
+        check_preparable(folder)
+    except PreparationError as error:
+        raise ApiError(409, "Préparation impossible", [str(error)])
+    profile = load_profile(path)
+    task = TASKS.create(None, kind="preparation", cv_id=cv_id)
+    TASKS.submit(_run_preparation, task["task_id"], folder, profile, preparer)
+    return {"task_id": task["task_id"], "status": task["status"]}
+
+
 # ---------- Suppression d'un CV ----------
 
 @router.delete("/{cv_id}", status_code=204)
@@ -453,7 +543,8 @@ def delete_cv(cv_id: str, base: Path = Depends(applications_dir)):
     modification de ce CV est en cours.
     """
     folder = _cv_folder(cv_id, base)
-    busy = ["une génération, une analyse ou une modification de ce CV est en cours : réessaie quand elle sera terminée."]
+    busy = ["une génération, une analyse, une préparation ou une modification de ce CV est en cours : "
+            "réessaie quand elle sera terminée."]
     if TASKS.active_for(cv_id) or not LOCKS.try_acquire(cv_id):
         raise ApiError(409, "Suppression impossible pour le moment", busy)
     try:

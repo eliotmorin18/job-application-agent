@@ -25,6 +25,14 @@ export const cvAnalysisQuery = (id: string) =>
     retry: retryUnlessClientError,
   });
 
+/** Saved deep interview preparation (null if none): reading it never starts a generation. */
+export const cvPreparationQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["cvs", id, "preparation"],
+    queryFn: () => cvApi.getPreparation(id),
+    retry: retryUnlessClientError,
+  });
+
 /** Zones of one compiled version of the PDF (`version` = updated_at of the CV): refetched with each new PDF. */
 export const cvLayoutQuery = (id: string, version: number) =>
   queryOptions({

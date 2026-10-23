@@ -1,9 +1,13 @@
+import copy
 import json
 import re
 import shutil
 import subprocess
 import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from pypdf import PdfReader
 
 from cv.document import load_document, save_document, selected_ids, validate_document
 from cv.layout import LAYOUT_FILE, write_layout
@@ -137,11 +141,148 @@ def compile_cv(main_tex: Path, timeout: int = 180) -> tuple[Path, int]:
         raise RuntimeError(f"La compilation LaTeX a échoué ({main_tex}) :\n{details}")
 
     log = (main_tex.parent / "build" / main_tex.with_suffix(".log").name).read_text(errors="ignore")
-    pages = _count_pages(log)
+    pages = pdf_pages(pdf) or _count_pages(log)
 
     write_layout(main_tex.parent / "build", pdf, pages)
 
     return pdf, pages
+
+
+def pdf_pages(pdf: Path) -> int:
+    """Nombre réel de pages du PDF (0 s'il ne peut pas être lu)."""
+    try:
+        return len(PdfReader(str(pdf)).pages)
+    except Exception:                               # PDF illisible : le nombre reste inconnu
+        return 0
+
+
+# ---------- Une page au maximum ----------
+
+# Compilations supplémentaires au plus pour ramener un CV trop long à une page (aucun appel à Claude)
+MAX_FIT_COMPILES = 6
+
+
+class CvTooLongError(RuntimeError):
+    """Le CV dépasse une page malgré les ajustements : il est enregistré tel que rédigé, à raccourcir."""
+
+    def __init__(self, folder: Path, pages: int, adjustments: list[str]):
+        self.folder, self.pages, self.adjustments = Path(folder), pages, adjustments
+        count = f"{pages} pages" if pages else "un nombre de pages inconnu"
+        super().__init__(f"Le CV ne tient pas sur une page, même après les ajustements automatiques (le PDF fait "
+                         f"{count}). Il a été enregistré tel que rédigé : raccourcis-le dans l'éditeur (onglet « CV »).")
+
+
+@dataclass
+class FitResult:
+    pdf: Path
+    pages: int
+    document: dict
+    adjustments: list[str] = field(default_factory=list)
+
+
+def _trim(entries: list, first: int, others: int) -> bool:
+    """Garde au plus `first` puces pour la première entrée, `others` pour les suivantes. True si modifié."""
+    changed = False
+    for n, entry in enumerate(entries):
+        keep = first if n == 0 else others
+        if len(entry["bullets"]) > keep:
+            entry["bullets"] = entry["bullets"][:keep]
+            changed = True
+    return changed
+
+
+def _secondary_bullets(doc: dict) -> str | None:
+    projects = _trim(doc["projects"], 2, 1)
+    education = _trim(doc["education"], 1, 1)
+    return "Détails secondaires des projets et des formations retirés." if projects or education else None
+
+
+def _last_project(doc: dict) -> str | None:
+    if len(doc["projects"]) > 1:
+        return f"Projet « {doc['projects'].pop()['name']} » retiré (le moins pertinent pour l'offre)."
+    return None
+
+
+def _last_education(doc: dict) -> str | None:
+    if len(doc["education"]) > 2:
+        return f"Formation « {doc['education'].pop()['institution']} » retirée (la moins utile pour l'offre)."
+    return None
+
+
+def _experience_bullets(doc: dict) -> str | None:
+    return "Puces secondaires des expériences retirées." if _trim(doc["experiences"], 3, 2) else None
+
+
+def _interests(doc: dict) -> str | None:
+    if len(doc["interests"]) > 3:
+        doc["interests"] = doc["interests"][:3]
+        return "Centres d'intérêt limités à trois."
+    return None
+
+
+def _last_experience(doc: dict) -> str | None:
+    if len(doc["experiences"]) > 2:
+        experience = doc["experiences"].pop()
+        name = " — ".join(part for part in (experience["title"], experience["organization"]) if part)
+        return f"Expérience « {name} » retirée (la moins pertinente pour l'offre)."
+    return None
+
+
+# Du moins important au plus important. Claude ordonne chaque liste par pertinence (cv/generate.py) :
+# on retire toujours en fin de liste. Rien n'est réécrit : aucune information ne peut être ajoutée.
+REDUCTIONS = (_secondary_bullets, _last_project, _last_education, _last_education, _experience_bullets,
+              _interests, _last_experience)
+
+
+def _apply(folder: Path, doc: dict, main_tex: Path, compile_pdf) -> tuple[Path, int]:
+    write_sections(folder, doc)
+    save_document(folder, doc)
+    return compile_pdf(main_tex)
+
+
+def fit_one_page(main_tex: Path, doc: dict, compile_pdf=None) -> FitResult:
+    """
+    Compile le CV et le ramène à une page si besoin, en retirant le contenu secondaire (une
+    réduction à la fois, au plus MAX_FIT_COMPILES compilations de plus, sans appel à Claude).
+    cv.json et selection.json décrivent toujours le PDF obtenu. Si une page ne peut pas être
+    atteinte, le CV d'origine est remis (contenu complet, à raccourcir à la main) et
+    CvTooLongError est levée : jamais de succès avec plus d'une page.
+    """
+    compile_pdf = compile_pdf or compile_cv
+    folder = main_tex.parent
+    pdf, pages = compile_pdf(main_tex)
+    if pages == 1:
+        return FitResult(pdf, pages, doc)
+
+    current, adjustments, compiles = copy.deepcopy(doc), [], 0
+    for reduce in REDUCTIONS:
+        if compiles >= MAX_FIT_COMPILES:
+            break
+        note = reduce(current)
+        if note is None:
+            continue
+        adjustments.append(note)
+        compiles += 1
+        pdf, pages = _apply(folder, current, main_tex, compile_pdf)
+        if pages == 1:
+            _record_adjustments(folder, current, adjustments)
+            return FitResult(pdf, pages, current, adjustments)
+
+    _, pages = _apply(folder, doc, main_tex, compile_pdf)  # contenu complet : l'utilisateur choisit quoi retirer
+    raise CvTooLongError(folder, pages, adjustments)
+
+
+def _record_adjustments(folder: Path, doc: dict, adjustments: list[str]) -> None:
+    """selection.json garde les éléments réellement dans le CV et la liste des ajustements faits."""
+    path = folder / "selection.json"
+    try:
+        selection = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        selection = {}
+    experience_ids, project_ids = selected_ids(doc)
+    selection.update(selected_experience_ids=experience_ids, selected_project_ids=project_ids,
+                     page_adjustments=adjustments)
+    path.write_text(json.dumps(selection, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _count_pages(log: str) -> int:

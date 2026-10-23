@@ -86,31 +86,31 @@ def fake_answer() -> dict:
             {"title": "Projet inventé", "explanation": "x", "requirement_ids": [],
              "evidence": [evidence("project", "projet-inexistant")]},
         ],
-        "recommendations": [
-            {"category": "cv", "text": "Mettre en avant le mAP.", "requirement_ids": ["req-2a", "req-99"]},
-            {"category": "obstacle", "text": "Expérience demandée supérieure à la tienne.", "requirement_ids": ["req-5"]},
-        ],
-        "interview_questions": [
-            question("technical", "Comment évalueriez-vous un modèle de détection d'objets ?", ["req-1"],
-                     topics=["mAP", "IoU", "mAP", " "]),
-            question("experience", "Parlez-moi de votre stage en vision par ordinateur.", ["req-1"],
-                     proofs=[evidence("experience", "example-research-company"), evidence("project", "projet-inventé")]),
-            question("experience", "Racontez votre expérience chez Robotique Inventée.", [],
-                     proofs=[evidence("experience", "experience-inventee")]),     # expérience absente du profil
-            question("gap", "Vous avez travaillé avec ROS ?", ["req-3", "req-99"]),
-            question("gap", "Que savez-vous de Kubernetes ?", ["req-8"]),
-            question("gap", "Comment compensez-vous le manque d'expérience en robotique ?", ["req-5"]),
-            question("motivation", "Pourquoi la robotique de tri ?", []),
-            question("motivation", "pourquoi la robotique de tri ?", []),                 # doublon
-            question("technical", "Question sans piste ?", [], guidance=[" "]),
-            question("technical", "   ", []),
-        ],
     }
 
 
 def question(kind, text, requirement_ids, proofs=(), topics=(), guidance=("Structurer la réponse.",)):
     return {"kind": kind, "question": text, "purpose": "Évaluer.", "answer_guidance": list(guidance),
             "evidence": list(proofs), "topics_to_review": list(topics), "requirement_ids": list(requirement_ids)}
+
+
+def old_interview_questions() -> list:
+    """Questions telles que les analyses enregistrées avant la séparation les contenaient (avant filtrage)."""
+    return [
+        question("technical", "Comment évalueriez-vous un modèle de détection d'objets ?", ["req-1"],
+                 topics=["mAP", "IoU", "mAP", " "]),
+        question("experience", "Parlez-moi de votre stage en vision par ordinateur.", ["req-1"],
+                 proofs=[evidence("experience", "example-research-company"), evidence("project", "projet-inventé")]),
+        question("experience", "Racontez votre expérience chez Robotique Inventée.", [],
+                 proofs=[evidence("experience", "experience-inventee")]),     # expérience absente du profil
+        question("gap", "Vous avez travaillé avec ROS ?", ["req-3", "req-99"]),
+        question("gap", "Que savez-vous de Kubernetes ?", ["req-8"]),
+        question("gap", "Comment compensez-vous le manque d'expérience en robotique ?", ["req-5"]),
+        question("motivation", "Pourquoi la robotique de tri ?", []),
+        question("motivation", "pourquoi la robotique de tri ?", []),                 # doublon
+        question("technical", "Question sans piste ?", [], guidance=[" "]),
+        question("technical", "   ", []),
+    ]
 
 
 class RequirementsTest(unittest.TestCase):
@@ -197,7 +197,7 @@ class AnalyzeFitTest(unittest.TestCase):
         self.assertEqual(overview["missions"], OFFER["missions"])
         self.assertEqual([s["title"] for s in self.analysis["strengths"]], ["Détection d'objets"])
         self.assertEqual(self.analysis["strengths"][0]["requirement_ids"], ["req-1"])
-        self.assertEqual(self.analysis["recommendations"][0]["requirement_ids"], ["req-2a"])
+        self.assertEqual(self.analysis["recommendations"], [])
         self.assertIn("Évaluation ignorée : exigence « req-99 » inconnue.", self.analysis["warnings"])
         self.assertEqual(self.analysis["offer"], {"company": "Acme Robotics", "job_title": "Stage Vision par Ordinateur",
                                                   "location": "Lyon", "contract_type": "Stage",
@@ -205,55 +205,14 @@ class AnalyzeFitTest(unittest.TestCase):
         self.assertEqual(self.analysis["profile_fingerprint"], profile_fingerprint(self.profile))
         self.assertNotIn("John", self.analysis["profile_fingerprint"])
 
-    def test_interview_questions_are_checked_against_the_profile(self):
-        questions = self.analysis["interview_questions"]
-        self.assertEqual([q["question"] for q in questions], [
-            "Comment évalueriez-vous un modèle de détection d'objets ?",
-            "Parlez-moi de votre stage en vision par ordinateur.",
-            "Vous avez travaillé avec ROS ?",
-            "Que savez-vous de Kubernetes ?",
-            "Comment compensez-vous le manque d'expérience en robotique ?",
-            "Pourquoi la robotique de tri ?",
-        ])
-        technical, experience = questions[0], questions[1]
-        self.assertEqual(technical["topics_to_review"], ["mAP", "IoU"])
-        self.assertEqual(set(technical), {"kind", "question", "purpose", "answer_guidance", "evidence",
-                                          "topics_to_review", "requirement_ids"})
-        # only the real experience is kept as evidence, with its profile label
-        self.assertEqual([(e["type"], e["id"]) for e in experience["evidence"]],
-                         [("experience", "example-research-company")])
-        self.assertTrue(experience["evidence"][0]["label"])
-        self.assertIn("Question d'entretien ignorée (expérience absente du profil) : "
-                      "« Racontez votre expérience chez Robotique Inventée. ».", self.analysis["warnings"])
-        self.assertIn("Question d'entretien ignorée (sans piste de réponse) : « Question sans piste ? ».",
-                      self.analysis["warnings"])
-        # requirement links are filtered; gaps keep the missing / not_documented distinction of the requirements
-        self.assertEqual(questions[2]["requirement_ids"], ["req-3"])
-        statuses = {r["id"]: r["status"] for r in self.analysis["requirements"]}
-        self.assertEqual(statuses[questions[3]["requirement_ids"][0]], "not_documented")
-        self.assertEqual(statuses[questions[4]["requirement_ids"][0]], "missing")
-
-    def test_interview_questions_do_not_change_the_score(self):
-        answer = fake_answer()
-        answer["interview_questions"] = []
-        with mock.patch.object(analysis_module, "run_claude", return_value=answer):
-            without = analyze_fit(OFFER, self.profile)
-        self.assertEqual(without["interview_questions"], [])
-        self.assertEqual(without["score"], self.analysis["score"])
-        self.assertEqual(without["recommendations"], self.analysis["recommendations"])
-
-    def test_at_most_eight_interview_questions(self):
-        answer = fake_answer()
-        answer["interview_questions"] = [question("technical", f"Question {n} sur YOLO ?", []) for n in range(11)]
-        with mock.patch.object(analysis_module, "run_claude", return_value=answer):
-            result = analyze_fit(OFFER, self.profile)
-        self.assertEqual(len(result["interview_questions"]), 8)
-        self.assertIn("3 question(s) d'entretien en trop ignorée(s).", result["warnings"])
-
-    def test_the_same_claude_call_asks_for_the_interview_questions(self):
+    def test_analysis_does_not_prepare_the_interview(self):
+        # Questions, conseils et recherche viennent de la préparation approfondie, à la demande
         prompt, _, schema, _ = self.claude.call_args.args
-        self.assertIn("Interview questions: 5 to 8 questions", prompt)
-        self.assertIn("interview_questions", schema["required"])
+        self.assertEqual(set(schema["properties"]), {"overview", "requirements", "strengths"})
+        for prepared in ("Interview questions", "interview_questions", "Recommendations", "recommendations"):
+            self.assertNotIn(prepared, prompt)
+        self.assertEqual(self.analysis["recommendations"], [])
+        self.assertNotIn("interview_questions", self.analysis)
         self.assertEqual(self.claude.call_count, 1)
 
     def test_bad_splits_duplicates_and_forgotten_requirements(self):

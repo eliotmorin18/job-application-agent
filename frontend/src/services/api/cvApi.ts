@@ -1,7 +1,7 @@
 import { ApiError, request, segment } from "./httpClient";
-import type { CvAnalysis, CvApi, CvLayout } from "./cvTypes";
+import type { CvAnalysis, CvApi, CvLayout, CvPreparation } from "./cvTypes";
 
-/** null for a 404 (no analysis / no layout yet); every other error is thrown as is. */
+/** null for a 404 (no analysis / preparation / layout yet); every other error is thrown as is. */
 async function orNull<T>(call: Promise<T>): Promise<T | null> {
   try {
     return await call;
@@ -30,6 +30,8 @@ export const cvApi: CvApi = {
   },
   startGeneration: (url) => request("POST", "/cvs/generate", { url }),
   startAnalysis: (id) => request("POST", `/cvs/${segment(id)}/analysis`),
+  getPreparation: (id) => orNull(request<CvPreparation>("GET", `/cvs/${segment(id)}/preparation`)),
+  startPreparation: (id) => request("POST", `/cvs/${segment(id)}/preparation`),
   getTask: (taskId) => request("GET", `/cvs/tasks/${segment(taskId)}`),
 };
 
