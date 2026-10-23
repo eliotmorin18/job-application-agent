@@ -55,3 +55,28 @@ export function sourceDate(value: string | null): string | null {
   if (!month) return null;
   return [match[3] ? String(Number(match[3])) : null, month, match[1]].filter(Boolean).join(" ");
 }
+
+// A sentence ends with . ! ? or … followed by a space and an upper-case letter (or an opening quote).
+const SENTENCE_BREAK = /(?<=[.!?…])\s+(?=[A-ZÀ-ÖØ-Þ«"“])/u;
+
+/**
+ * Splits a text after its first `count` sentences ("Vue d'ensemble": short summary first, the rest on
+ * demand). Display only: `lead` + " " + `rest` gives back the whole text; `rest` is "" when nothing is cut;
+ * `count` is the number of sentences of the whole text.
+ */
+/** Sentences of a text (none for an empty text). */
+export function splitSentences(text: string): string[] {
+  return text.trim() ? text.trim().split(SENTENCE_BREAK) : [];
+}
+
+export function leadSentences(
+  text: string,
+  count: number,
+): { lead: string; rest: string; count: number } {
+  const sentences = splitSentences(text);
+  return {
+    lead: sentences.slice(0, count).join(" "),
+    rest: sentences.slice(count).join(" "),
+    count: sentences.length,
+  };
+}

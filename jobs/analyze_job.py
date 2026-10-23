@@ -16,7 +16,7 @@ The page text is provided on stdin. Besides the job offer, it usually contains n
 cookie banners, navigation menus, footers, sharing buttons, "similar jobs" / recommended
 offers, company marketing, legal notices, login prompts. A search page may list several
 offers: extract only the one that is displayed in detail (the selected one).
-Ignore all the noise.
+Ignore all the noise (the company's own presentation may only feed company_activity).
 
 FAITHFULNESS — the most important rule:
 - Every value must come from the offer itself. Never add a skill, tool, requirement,
@@ -31,10 +31,14 @@ FAITHFULNESS — the most important rule:
 
 What to extract:
 - company, job_title, location, contract_type: as stated (null if absent).
+- company_activity: one short sentence saying concretely what the company does (activity, product
+  or service), only if the page states it (e.g. its presentation paragraph); null otherwise.
+  Never describe the job or the team here.
 - job_level: the level the offer targets, as stated or obvious from the title
   (e.g. "Stage", "Internship", "Alternance", "Junior", "Senior", "8+ years"). null if unclear.
 - offer_language: the language the offer is written in ("fr", "en", ...).
-- summary: 1-2 sentences describing the role and the team/context, from the offer.
+- summary: 1-2 sentences describing the role, its goal and the team, from the offer (not the
+  company activity).
 - missions: the main tasks of the job, at most 8, most important first. One task per item.
   Do not include section headings ("Activités", "Your missions") as tasks.
 - must_have: the requirements the offer presents as required (skills, tools, experience,
@@ -70,6 +74,7 @@ JOB_SCHEMA = {
     "type": "object",
     "properties": {
         "company": _text_or_null(),
+        "company_activity": _text_or_null(),
         "job_title": _text_or_null(),
         "location": _text_or_null(),
         "contract_type": _text_or_null(),
@@ -100,6 +105,7 @@ JOB_SCHEMA = {
     },
     "required": [
         "company",
+        "company_activity",
         "job_title",
         "location",
         "contract_type",

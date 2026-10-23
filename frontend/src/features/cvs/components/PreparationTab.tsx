@@ -1,4 +1,4 @@
-// « Préparation à l'entretien » tab: the deep interview preparation (preparation.json), generated once on
+// « Entretien » tab: the deep interview preparation (preparation.json), generated once on
 // demand. Display only: texts come from the backend unchanged. Without a preparation, only a short
 // presentation and the « Générer ma préparation » button are shown.
 
@@ -398,7 +398,7 @@ export function PreparationTab({ cv }: { cv: CvSummary }) {
           </Button>
           {!analysisReady && (
             <span className="text-xs text-muted-foreground">
-              Disponible une fois l'analyse d'adéquation terminée (onglet « Offre et adéquation »).
+              Disponible une fois l'analyse d'adéquation terminée (onglet « Vue d'ensemble »).
             </span>
           )}
         </div>

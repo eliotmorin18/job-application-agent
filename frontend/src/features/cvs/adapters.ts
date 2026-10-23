@@ -3,13 +3,17 @@
 
 import type { CandidateProfile } from "@/services/api/types";
 import type {
+  CompletedAnalysis,
   CvDocument,
   CvEducation,
   CvExperience,
   CvLayout,
   CvProject,
   CvTask,
+  Requirement,
+  RequirementStatus,
 } from "@/services/api/cvTypes";
+import { leadSentences, splitSentences, taskText } from "./format";
 
 // ---------- Selection and clickable zones ----------
 
@@ -236,4 +240,385 @@ export function cleanDocument(doc: CvDocument): CvDocument {
     languages: doc.languages.filter((l) => l.name.trim() || l.level.trim()),
     interests: clean(doc.interests),
   };
+}
+
+// ---------- « Vue d'ensemble » (analysis.json) ----------
+// Selection only: texts are shown as saved (never rewritten), the full lists stay reachable.
+
+const STOP_WORDS = new Set(
+  "avec pour dans leur leurs selon afin ainsi entre etre tous toute toutes plus vous nous votre notre cette ces sont from with that this your their into".split(
+    " ",
+  ),
+);
+
+/** Lower case, without accents, single spaces, « a/b » written « a / b ». */
+function normalize(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, " / ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Significant words of a text (lower case, without accents, at least four letters). */
+function contentWords(text: string): Set<string> {
+  const words = normalize(text).split(/[^\p{L}\p{N}]+/u);
+  return new Set(words.filter((w) => w.length >= 4 && !STOP_WORDS.has(w)));
+}
+
+/** Share of the significant words of `a` that also appear in `b` (0 when `a` has none). */
+function coveredBy(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0) return 0;
+  return [...a].filter((w) => b.has(w)).length / a.size;
+}
+
+/**
+ * The first `max` missions of the offer, skipping a mission whose significant words are mostly
+ * (70 %) those of a mission already kept: the same step written twice is shown once. Nothing is merged
+ * or reworded; « Voir toutes les missions » shows the complete list.
+ */
+export function mainMissions(missions: string[], max = 4): string[] {
+  const kept: { text: string; words: Set<string> }[] = [];
+  for (const text of missions.map((m) => m.trim()).filter(Boolean)) {
+    const words = contentWords(text);
+    if (kept.some((k) => k.text === text || coveredBy(words, k.words) >= 0.7)) continue;
+    kept.push({ text, words });
+    if (kept.length === max) break;
+  }
+  return kept.map((k) => k.text);
+}
+
+/**
+ * Up to `max` example tasks (without their "Par exemple, tu pourrais…" opening) that do not repeat
+ * a shown mission: a task whose significant words mostly (60 %) belong to one mission is skipped.
+ */
+export function exampleTasks(tasks: string[], missions: string[], max = 2): string[] {
+  const missionWords = missions.map(contentWords);
+  return tasks
+    .map(taskText)
+    .filter(Boolean)
+    .filter((t) => {
+      const words = contentWords(t);
+      return !missionWords.some((m) => coveredBy(words, m) >= 0.6);
+    })
+    .slice(0, max);
+}
+
+// Personal qualities, not technical skills (the analysis does not assess them either).
+const GENERAL_QUALITIES = new Set([
+  "rigueur",
+  "curiosite",
+  "autonomie",
+  "creativite",
+  "adaptabilite",
+  "organisation",
+  "motivation",
+  "dynamisme",
+  "proactivite",
+  "polyvalence",
+  "perseverance",
+  "ponctualite",
+  "communication",
+  "leadership",
+  "travail en equipe",
+  "rigor",
+  "rigour",
+  "curiosity",
+  "autonomy",
+  "creativity",
+  "adaptability",
+  "teamwork",
+  "team player",
+  "proactivity",
+]);
+const QUALITY_PREFIXES = ["esprit ", "sens ", "capacite ", "gout ", "envie ", "ability to "];
+
+/** A real technical keyword: short (three words per « / » side), not a sentence, list or quality. */
+function isKeyword(text: string): boolean {
+  const key = normalize(text);
+  return (
+    text.length <= 40 &&
+    key.split(" / ").every((side) => side.split(" ").length <= 3) &&
+    !/[.;:!?]$|[,;]/.test(text) &&
+    !GENERAL_QUALITIES.has(key) &&
+    !QUALITY_PREFIXES.some((p) => key.startsWith(p))
+  );
+}
+
+/**
+ * Up to `max` technical keywords of the job (display only, analysis.json unchanged): technologies and
+ * skills sought, without personal qualities, duplicates or a general term when a more precise one
+ * contains it (« Deep Learning » inside « Machine Learning / Deep Learning »); two keywords the offer
+ * gives as alternatives become one (« PyTorch ou TensorFlow »). Keywords of essential requirements
+ * come first, then those of required ones.
+ */
+export function keySkills(analysis: CompletedAnalysis, max = 6): string[] {
+  const { overview } = analysis;
+  const requirements = visibleRequirements(analysis);
+  const sources = [...requirements.map((r) => r.text), ...overview.skills_sought].map(normalize);
+
+  const seen = new Set<string>();
+  let keywords = [...overview.technologies, ...overview.skills_sought]
+    .map((s) => s.trim())
+    .filter((s) => {
+      const key = normalize(s);
+      if (!s || !isKeyword(s) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const words = (k: string) =>
+    new Set(
+      normalize(k)
+        .split(/[^\p{L}\p{N}+#]+/u)
+        .filter(Boolean),
+    );
+  keywords = keywords.filter((k) => {
+    const own = words(k);
+    return !keywords.some((other) => {
+      const larger = words(other);
+      return other !== k && larger.size > own.size && [...own].every((w) => larger.has(w));
+    });
+  });
+
+  // « A ou B », « A or B », « A / B » in the offer: one keyword
+  const merged: string[] = [];
+  const absorbed = new Set<string>();
+  for (const k of keywords) {
+    if (absorbed.has(k)) continue;
+    const partner = keywords.find(
+      (other) =>
+        other !== k &&
+        !absorbed.has(other) &&
+        [" ou ", " or ", " / "].some((link) =>
+          sources.some(
+            (text) =>
+              text.includes(normalize(k) + link + normalize(other)) ||
+              text.includes(normalize(other) + link + normalize(k)),
+          ),
+        ),
+    );
+    if (partner) absorbed.add(partner);
+    merged.push(partner ? `${k} ou ${partner}` : k);
+  }
+
+  const rank = (k: string) => {
+    const parts = k.split(" ou ").map(normalize);
+    const inText = (r: Requirement) => parts.some((p) => normalize(r.text).includes(p));
+    if (requirements.some((r) => r.category === "required" && r.importance === "high" && inText(r)))
+      return 0;
+    return requirements.some((r) => r.category === "required" && inText(r)) ? 1 : 2;
+  };
+  return merged
+    .map((k, i) => ({ k, i, rank: rank(k) }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .slice(0, max)
+    .map((x) => x.k);
+}
+
+/**
+ * « L'entreprise » and « Le poste en bref »: the first sentence of the company activity (empty when
+ * unknown, never guessed, and dropped when it mostly repeats the job summary: it then describes the
+ * job, not the company), then the first two summary sentences that do not repeat it.
+ */
+export function jobBrief(
+  summary: string,
+  activity: string | null | undefined,
+): { company: string; job: string } {
+  const summaryWords = contentWords(summary);
+  const first = activity ? firstSentence(activity) : "";
+  const company = coveredBy(contentWords(first), summaryWords) >= 0.5 ? "" : first;
+  const companyWords = contentWords(company);
+  const job = splitSentences(summary)
+    .filter((s) => coveredBy(contentWords(s), companyWords) < 0.6)
+    .slice(0, 2)
+    .join(" ");
+  return { company, job };
+}
+
+// Link words ignored when comparing two criteria (as cv/analysis.py does for new analyses).
+const LINK_WORDS = new Set(
+  "de du des la le les l d et en a au aux un une avec of the and for in at via with".split(" "),
+);
+
+/** Words of a text, in order (lower case, without accents or punctuation; « C++ », « C# » kept). */
+function wordList(text: string): string[] {
+  return normalize(text)
+    .split(/[^\p{L}\p{N}+#]+/u)
+    .filter(Boolean);
+}
+
+/** Same criterion: the same words in the same order, link words aside (« avec PyTorch » = « (PyTorch) »). */
+function criterionKey(text: string): string {
+  return wordList(text)
+    .filter((w) => !LINK_WORDS.has(w))
+    .join(" ");
+}
+
+/**
+ * The requirements (and parts) to show, each once: without those the analysis marks as duplicates,
+ * nor (older analyses) one that repeats an earlier one word for word. A required requirement is never
+ * hidden behind a preferred one. Statuses are never changed.
+ */
+export function visibleRequirements(analysis: CompletedAnalysis): Requirement[] {
+  const seen = new Map<string, Requirement>();
+  return analysis.requirements.filter((r) => {
+    if (r.duplicate_of) return false;
+    const key = criterionKey(r.text);
+    const earlier = seen.get(key);
+    if (earlier && !(r.category === "required" && earlier.category === "preferred")) return false;
+    if (key && !earlier) seen.set(key, r);
+    return true;
+  });
+}
+
+// ---------- Requirement lines (« Exigences détaillées ») ----------
+
+/** « Obligatoires »: conditions and prerequisites; « Essentielles »: core skills; « Souhaitées ». */
+export type RequirementGroup = "required" | "essential" | "preferred";
+
+/** How the parts of a split requirement combine, as the offer states it; "unknown" when it does not. */
+export type PartsRelation = "and" | "or" | "unknown";
+
+export interface RequirementLine {
+  /** The requirement id of the offer (the parent id of split parts). */
+  id: string;
+  /** The requirement as the offer writes it (the parent text of split parts). */
+  text: string;
+  group: RequirementGroup;
+  /** The assessed criteria: one, or the parts of a split requirement (each with its own status). */
+  parts: Requirement[];
+  relation: PartsRelation | null;
+  /** Overall status when it can be established reliably, otherwise null (the parts keep theirs). */
+  status: RequirementStatus | null;
+}
+
+const STATUS_RANK: RequirementStatus[] = ["met", "partial", "not_documented", "missing"];
+const GROUP_ORDER: RequirementGroup[] = ["required", "essential", "preferred"];
+
+/**
+ * A requirement of the offer stays « obligatoire » when it is a condition (education, experience,
+ * languages) or a required skill of normal importance, even if it is also stressed; a required skill
+ * the offer stresses (importance « high ») is « essentielle »; the others are « souhaitées ».
+ */
+function groupOf(parts: Requirement[]): RequirementGroup {
+  const first = parts[0]!;
+  if (first.category === "preferred") return "preferred";
+  const skill = (first.source ?? "must_have") === "must_have";
+  return skill && parts.some((p) => p.importance === "high") ? "essential" : "required";
+}
+
+/**
+ * The link the offer writes just before the last part (« détection, tracking ou calibration »: or;
+ * « Python et SQL »: and). A comma or anything else is not interpreted: "unknown".
+ */
+function relationOf(parentText: string, parts: Requirement[]): PartsRelation {
+  const others = new Set(parts.slice(0, -1).flatMap((p) => wordList(p.text)));
+  const first = wordList(parts[parts.length - 1]!.text).find((w) => !others.has(w));
+  if (!first) return "unknown";
+  const parent = normalize(parentText);
+  const escaped = first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").exec(parent);
+  if (!match) return "unknown";
+  const before = parent.slice(0, match.index + match[1]!.length);
+  if (/(^|\s)(ou|or)\s*$/.test(before)) return "or";
+  if (/(^|\s)(et|and|&)\s*$/.test(before)) return "and";
+  return "unknown";
+}
+
+/**
+ * Overall status of a split requirement, only when it is reliable: the same status for every part;
+ * for alternatives (or), the best one (an undocumented alternative is not a gap when another is met);
+ * for criteria that are all needed (and), « non remplie » when one is not met. Otherwise null.
+ */
+function overallStatus(
+  parts: Requirement[],
+  relation: PartsRelation | null,
+): RequirementStatus | null {
+  const ranks = parts.map((p) => STATUS_RANK.indexOf(p.status));
+  if (new Set(ranks).size === 1) return parts[0]!.status;
+  if (relation === "or") return STATUS_RANK[Math.min(...ranks)]!;
+  if (relation === "and" && parts.some((p) => p.status === "missing")) return "missing";
+  return null;
+}
+
+/**
+ * The lines of « Exigences détaillées »: one per requirement of the offer (split parts gathered under
+ * it, in their order), « Obligatoires » first, then « Essentielles », then « Souhaitées ». Display
+ * only: analysis.json is not changed and no status is re-assessed.
+ */
+export function requirementLines(analysis: CompletedAnalysis): RequirementLine[] {
+  const byId = new Map<string, Requirement[]>();
+  for (const r of visibleRequirements(analysis)) {
+    const key = r.parent_id || r.id;
+    byId.set(key, [...(byId.get(key) ?? []), r]);
+  }
+  const lines = [...byId.entries()].map(([id, parts]): RequirementLine => {
+    const split = parts.length > 1;
+    const relation = split ? relationOf(parts[0]!.parent_text ?? "", parts) : null;
+    return {
+      id,
+      text: split ? parts[0]!.parent_text || parts.map((p) => p.text).join(", ") : parts[0]!.text,
+      group: groupOf(parts),
+      parts,
+      relation,
+      status: overallStatus(parts, relation),
+    };
+  });
+  return lines
+    .map((line, i) => ({ line, i }))
+    .sort(
+      (a, b) => GROUP_ORDER.indexOf(a.line.group) - GROUP_ORDER.indexOf(b.line.group) || a.i - b.i,
+    )
+    .map(({ line }) => line);
+}
+
+/** The first sentence of a text (strengths, attention points): the rest stays in the detail. */
+export function firstSentence(text: string): string {
+  return leadSentences(text, 1).lead;
+}
+
+export interface AttentionPoint {
+  id: string;
+  text: string;
+  /** The status is shown as is: "not met", "partially met" and "not documented" stay distinct. */
+  status: Exclude<RequirementStatus, "met">;
+  explanation: string;
+}
+
+/**
+ * At most `max` attention points among the required requirements: not met (essential ones first),
+ * then essential ones only partially met, then essential ones the profile does not document (an
+ * uncertainty to clarify, not a certain weakness). A requirement with a reliable overall status counts
+ * once (an alternative that is met settles it); otherwise its parts count one by one. Preferred
+ * requirements stay in the detail.
+ */
+export function attentionPoints(analysis: CompletedAnalysis, max = 2): AttentionPoint[] {
+  const explanation = (parts: Requirement[], status: RequirementStatus) => {
+    const part = parts.find((p) => p.status === status) ?? parts[0]!;
+    return (
+      analysis.weaknesses.find((w) => w.requirement_id === part.id)?.explanation || part.explanation
+    );
+  };
+  const candidates = requirementLines(analysis)
+    .filter((line) => line.group !== "preferred")
+    .flatMap((line) =>
+      line.status
+        ? [{ id: line.id, text: line.text, status: line.status, parts: line.parts }]
+        : line.parts.map((p) => ({ id: p.id, text: p.text, status: p.status, parts: [p] })),
+    )
+    .map((c) => ({ ...c, essential: c.parts.some((p) => p.importance === "high") }));
+  const ordered = [
+    ...candidates.filter((c) => c.status === "missing" && c.essential),
+    ...candidates.filter((c) => c.status === "missing" && !c.essential),
+    ...candidates.filter((c) => c.status === "partial" && c.essential),
+    ...candidates.filter((c) => c.status === "not_documented" && c.essential),
+  ];
+  return ordered.slice(0, max).map((c) => ({
+    id: c.id,
+    text: c.text,
+    status: c.status as AttentionPoint["status"],
+    explanation: firstSentence(explanation(c.parts, c.status)),
+  }));
 }

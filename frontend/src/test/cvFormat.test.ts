@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applicationTitle, formatTimestamp, taskText } from "@/features/cvs/format";
+import { applicationTitle, formatTimestamp, leadSentences, taskText } from "@/features/cvs/format";
 
 describe("formatTimestamp", () => {
   it("formats a creation date (Unix seconds, UTC) in French", () => {
@@ -45,5 +45,29 @@ describe("taskText (display only)", () => {
     expect(taskText("Revue de code hebdomadaire")).toBe("Revue de code hebdomadaire");
     expect(taskText("  Tu peux aussi lire  ")).toBe("Tu peux aussi lire");
     expect(taskText("Par exemple,")).toBe("Par exemple,");
+  });
+});
+
+describe("leadSentences", () => {
+  it("keeps the first sentences and gives back the rest", () => {
+    expect(leadSentences("Un. Deux ! Trois ? « Quatre ».", 2)).toEqual({
+      lead: "Un. Deux !",
+      rest: "Trois ? « Quatre ».",
+      count: 4,
+    });
+  });
+
+  it("does not cut a short text, nor inside abbreviations or numbers", () => {
+    expect(leadSentences("Une seule phrase.", 2)).toEqual({
+      lead: "Une seule phrase.",
+      rest: "",
+      count: 1,
+    });
+    expect(leadSentences("  ", 2)).toEqual({ lead: "", rest: "", count: 0 });
+    expect(leadSentences("Budget de 1.5 M€ env. pour l'équipe. Fin.", 1)).toEqual({
+      lead: "Budget de 1.5 M€ env. pour l'équipe.",
+      rest: "Fin.",
+      count: 2,
+    });
   });
 });

@@ -82,8 +82,10 @@ layout are restored (422). On success
 `offer.json`; Claude rates each one (`met`, `partial`, `not_documented`, `missing`), writes the
 overview and the strengths (no interview content: `recommendations` is kept empty, and the
 `recommendations`/`interview_questions` of older analyses are read as they are, never shown in
-« Offre et adéquation », and reused by the interview preparation); Python drops evidence that does not
-exist in the profile, computes the score (`cv/fit_score.py`) and saves `analysis.json`. Reading an
+« Vue d'ensemble », and reused by the interview preparation); Python drops evidence that does not
+exist in the profile (experiences, projects, education, skills, languages and, since this version,
+interests), marks a requirement or part whose words repeat an earlier one as `duplicate_of`, copies
+`company_activity` from the offer extraction into `offer`, computes the score (`cv/fit_score.py`) and saves `analysis.json`. Reading an
 analysis never calls Claude; `POST /api/cvs/{cv_id}/analysis` (re)runs it, also for older CVs.
 The score is stored but not displayed.
 
@@ -145,9 +147,28 @@ the layout query are keyed by `updated_at`, so the preview and its zones always 
 
 « Mes candidatures » (routes `/cvs` and `/cvs/$cvId`, formerly « Mes CV ») presents each CV folder as
 an application: the title is the job title of the offer (else the role of the CV, else the folder
-name). The application page has three tabs in `?tab=`: `analyse` (« Offre et adéquation »),
-`preparation` (« Préparation à l'entretien ») and `edition` (« CV »); unknown values fall back to
-`analyse`. `AnalysisTab` shows the fit analysis; `PreparationTab` shows the saved deep preparation
+name). The application page has a compact header (title, company, location and contract from the
+analysis, « Télécharger le CV », « Voir l'offre », a discreet « Supprimer » with confirmation) and three tabs in `?tab=`:
+`analyse` (« Vue d'ensemble »), `edition` (« CV ») and `preparation` (« Entretien »); unknown values
+fall back to `analyse`. `OverviewTab` presents the saved analysis in two columns (page width up to 88rem; the
+« Entretien » tab keeps 72rem for readable lines). « Le poste et l'entreprise »: « L'entreprise » (first sentence of
+`offer.company_activity`, else of an activity the deep preparation kept from the offer; hidden when
+unknown or when it only repeats the job), « Le poste en bref » (two summary sentences), up to four missions (a mission that repeats an earlier one in other words is skipped; « Voir
+toutes les missions » shows the full list), two example tasks that do not repeat a shown mission, up to six
+technical keywords (no personal qualities, sentences or general terms covered by a more precise one;
+« PyTorch ou TensorFlow » when the offer gives alternatives; essential requirements first). « Mon profil
+pour ce poste »: three strengths (title + first sentence, evidence kept in the data and in the
+requirements), at most two attention points among required requirements (not met, then essential
+partial, then essential not documented, each with its own wording). « Exigences détaillées » is folded
+below, in three groups: « Obligatoires » (conditions — education, experience, languages — and required
+skills of normal importance), « Essentielles » (required skills the offer stresses), « Souhaitées ».
+`requirementLines` gives one line per requirement of the offer, its split parts gathered under it
+(`parent_id`); the overall status is shown only when reliable (same status for all parts; the best
+one when the offer writes the parts as alternatives with « ou »/« or »; « non remplie » when they are
+joined by « et »/« and » and one is not met), otherwise the statuses of the parts are counted. A click
+opens the criteria, their own status, justification and profile references under the line, one at a
+time. Equivalent requirements are shown once (`duplicate_of`, or the same words in the same order). Selection is done in `features/cvs/adapters.ts` and never rewrites a text; `warnings`
+(technical diagnostics) and the score are not shown; `PreparationTab` shows the saved deep preparation
 in six folded sections, or only a short presentation and the « Générer ma préparation » button. Only the interface changed: the API, files and code names keep `cv`.
 
 ## Limits

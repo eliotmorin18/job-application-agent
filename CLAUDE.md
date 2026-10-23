@@ -7,8 +7,8 @@ explain the offer and analyse the fit with the candidate profile.
 ## Current scope (branch `refactor/mvp-cv`)
 - Implemented: candidate profile + CV import (« Candidat »); « Mes candidatures » (routes `/cvs`,
   formerly « Mes CV »): preparing an application from a URL (offer analysis + tailored CV), list,
-  application page with three tabs (« Offre et adéquation », « Préparation à l'entretien », « CV »:
-  editing of `cv.json` with PDF recompilation and clickable zones), deletion; deep interview
+  application page with three tabs (« Vue d'ensemble »: offer and profile for the job, « CV »:
+  editing of `cv.json` with PDF recompilation and clickable zones, « Entretien »), deletion; deep interview
   preparation on demand (`interview/`, `preparation.json`, `company_research.json`). One application = one
   CV folder for now: the interface uses the application vocabulary, the code and API keep `cv`.
 - Not implemented: application tracking (statuses, board), cover letters, « Paramètres » (disabled

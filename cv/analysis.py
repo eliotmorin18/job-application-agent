@@ -8,7 +8,7 @@ calcule le score (cv/fit_score.py) et assemble le résultat. Rédigé en frança
 
     {
       "schema_version": 1, "status": "completed", "generated_at": "...", "profile_fingerprint": "...",
-      "offer": {"company", "job_title", "location", "contract_type", "source_url"},
+      "offer": {"company", "job_title", "location", "contract_type", "source_url", "company_activity"},
       "overview": {"summary", "missions", "technologies", "skills_sought", "plain_explanation",
                    "possible_tasks", "glossary": [{"term", "explanation"}]},
       "requirements": [{"id", "text", "category", "source", "parent_id", "parent_text", "duplicate_of",
@@ -28,9 +28,12 @@ et la préparation réutilise leurs questions. Les nouvelles analyses gardent "r
 pour que le format reste le même.
 
 En cas d'échec : {"schema_version": 1, "status": "failed", "generated_at", "error": {"message", "problems"}}.
-Une preuve est {"type": experience|project|education|skill|language, "id", "label", "justification"} :
+Une preuve est {"type": experience|project|education|skill|language|interest, "id", "label", "justification"} :
 son identifiant doit exister dans le profil (la correspondance peut être sémantique, justifiée
 par Claude), mais une preuve valide ne suffit pas à rendre une exigence « couverte ».
+"offer.company_activity" (activité de l'entreprise d'après l'offre) et le type de preuve "interest" sont
+absents des analyses plus anciennes ; une exigence (ou partie) dont les mots sont ceux d'une exigence
+précédente y est marquée comme doublon ("duplicate_of", poids 0).
 """
 
 import hashlib
@@ -50,7 +53,7 @@ from llm.claude_cli import run_claude
 SCHEMA_VERSION = 1
 ANALYSIS_FILE = "analysis.json"
 STATUSES = ["met", "partial", "not_documented", "missing"]
-EVIDENCE_TYPES = ["experience", "project", "education", "skill", "language"]
+EVIDENCE_TYPES = ["experience", "project", "education", "skill", "language", "interest"]
 MAX_PARTS = 6
 
 
@@ -111,14 +114,16 @@ Provided on stdin:
 - JOB OFFER: the structured job offer (JSON)
 - REQUIREMENTS: the requirements of the offer to assess, each with an id (fixed list)
 - CANDIDATE PROFILE: candidate.yaml, the ONLY source of truth about the candidate
-- PROFILE REFERENCES: the ids to cite as evidence (experiences, projects, education, skills, languages)
+- PROFILE REFERENCES: the ids to cite as evidence (experiences, projects, education, skills, languages,
+  interests)
 - CV: the content of the CV generated for this offer (may be absent)
 - KNOWN GAPS: requirements already identified as not covered when the CV was written (may be empty)
 
 Write everything in French, clearly and concisely, for the candidate ("tu").
 
 Overview (the candidate must understand the job in 30 seconds):
-- summary: 2-3 sentences on the job and its context, faithful to the offer.
+- summary: 1-2 sentences on the role and its goal, faithful to the offer. Do not describe what the
+  company does (the offer's company_activity is shown separately).
 - plain_explanation: in plain language, what the candidate would concretely do, what it is for,
   and the kind of daily tasks. Only what the offer says.
 - possible_tasks: 2-4 illustrative daily tasks, each clearly worded as a possibility
@@ -141,6 +146,10 @@ Requirements: assess EVERY requirement of REQUIREMENTS, by its id. Do not add or
   - missing: the profile shows the requirement is NOT fulfilled (lower degree or level, fewer years
     of experience, a required language level below the requirement...). Explain the contradiction.
   A close or similar skill is NOT the required skill: never assume mastery from proximity.
+  When a requirement lists several criteria and the profile shows some of them but says nothing about
+  the others, split it into parts so that each keeps its own status (e.g. met + not_documented)
+  instead of marking the whole requirement partial. In explanations, say that something "n'est pas
+  mentionné dans ton profil", never that the candidate lacks it, unless the profile contradicts it.
   A valid piece of evidence does not make a requirement "met" by itself: judge the level and scope.
 - importance: high if the requirement corresponds to one of the offer's key_points or is explicitly
   stressed by the offer, otherwise normal.
@@ -173,6 +182,8 @@ def profile_references(profile_data: dict) -> dict[str, dict[str, str]]:
             skills.setdefault(_skill_norm(value), (str(value), str(value)))
     languages = {_norm(entry.get("language")): (str(entry.get("language")), str(entry.get("language")))
                  for entry in profile_data.get("languages") or [] if isinstance(entry, dict) and entry.get("language")}
+    interests = {_norm(value): (str(value).strip(), str(value).strip())
+                 for value in profile_data.get("interests") or [] if isinstance(value, str) and value.strip()}
     return {
         "experience": items("experiences", lambda i: " — ".join(p for p in (i.get("title"), i.get("company")) if p)),
         "project": items("projects", lambda i: str(i.get("name") or i["id"])),
@@ -180,6 +191,7 @@ def profile_references(profile_data: dict) -> dict[str, dict[str, str]]:
                       for key, item in education_keys(profile_data)},
         "skill": skills,
         "language": languages,
+        "interest": interests,
     }
 
 
@@ -193,7 +205,8 @@ def _references_text(references: dict) -> str:
 
 def _lookup(references: dict, kind: str, ref_id: str):
     entries = references.get(kind, {})
-    key = _skill_norm(ref_id) if kind == "skill" else _norm(ref_id) if kind == "language" else str(ref_id).strip()
+    key = _skill_norm(ref_id) if kind == "skill" else _norm(ref_id) if kind in ("language", "interest") \
+        else str(ref_id).strip()
     return entries.get(key)
 
 
@@ -282,7 +295,30 @@ def _assess(requirements: list[dict], answers: list, references: dict, warnings:
                 "explanation": explanation,
                 "evidence": evidence,
             })
+    _mark_repeated(items)
     return items
+
+
+LINK_WORDS = {"avec", "with", "un", "une", "aux"}      # « avec PyTorch » = « (PyTorch) »
+
+
+def _mark_repeated(items: list[dict]) -> None:
+    """
+    Une exigence ou une partie dont les mots (dans le même ordre) sont exactement ceux d'une exigence précédente (souvent une
+    partie de « experience » qui reprend un « must_have ») devient son doublon : affichée une fois, poids 0.
+    Comme pour duplicate_of, une exigence indispensable n'est jamais le doublon d'une exigence appréciée.
+    """
+    def words(text: str) -> list:                     # dans l'ordre : mêmes mots autrement rangés = autre critère
+        return [word for word in _norm(text).split() if word not in STOPWORDS and word not in LINK_WORDS]
+
+    for n, item in enumerate(items):
+        if item["duplicate_of"] or not words(item["text"]):
+            continue
+        earlier = next((other for other in items[:n] if not other["duplicate_of"]
+                        and words(other["text"]) == words(item["text"])
+                        and not (item["category"] == "required" and other["category"] == "preferred")), None)
+        if earlier:
+            item["duplicate_of"], item["weight"] = earlier["id"], 0
 
 
 WEAKNESS_ORDER = {"missing": 0, "not_documented": 1, "partial": 2}
@@ -345,7 +381,8 @@ def analyze_fit(offer: dict, profile: CandidateProfile, document: dict | None = 
         "status": "completed",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "profile_fingerprint": profile_fingerprint(profile),
-        "offer": {key: offer.get(key) for key in ("company", "job_title", "location", "contract_type", "source_url")},
+        "offer": {key: offer.get(key) for key in ("company", "job_title", "location", "contract_type", "source_url",
+                                                  "company_activity")},
         "overview": {
             "summary": overview["summary"].strip(),
             "missions": [str(m) for m in offer.get("missions") or []],

@@ -44,7 +44,7 @@ function resultNotes(task: CvTask): string[] {
     );
   if (result.analysis_status === "failed")
     notes.push(
-      "L'analyse de correspondance a échoué : le CV est prêt, et vous pourrez relancer l'analyse depuis l'onglet « Offre et adéquation ».",
+      "L'analyse de correspondance a échoué : le CV est prêt, et vous pourrez relancer l'analyse depuis l'onglet « Vue d'ensemble ».",
     );
   return notes;
 }

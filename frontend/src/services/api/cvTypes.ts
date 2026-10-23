@@ -113,7 +113,8 @@ export interface CvUpdateResult {
 export type RequirementStatus = "met" | "partial" | "not_documented" | "missing";
 
 export interface Evidence {
-  type: "experience" | "project" | "education" | "skill" | "language";
+  /** "interest" (centres d'intérêt du profil): absent from older analyses. */
+  type: "experience" | "project" | "education" | "skill" | "language" | "interest";
   id: string;
   label: string;
   justification: string;
@@ -147,6 +148,8 @@ export interface CompletedAnalysis {
     location: string | null;
     contract_type: string | null;
     source_url: string | null;
+    /** What the company does, according to the offer; absent from older analyses. */
+    company_activity?: string | null;
   };
   overview: {
     summary: string;

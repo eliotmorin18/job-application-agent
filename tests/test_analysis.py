@@ -20,6 +20,7 @@ from cv import pipeline
 from cv.analysis import (ANALYSIS_SCHEMA, AnalysisError, analyze_fit, analyze_folder, load_analysis,
                          profile_fingerprint, requirements_from_offer, save_analysis)
 from cv.build_cv import write_cv
+from jobs.analyze_job import EXTRACTION_PROMPT, JOB_SCHEMA
 from cv.document import build_document
 from cv_fixtures import fake_draft
 from test_import_cv import sha
@@ -201,7 +202,8 @@ class AnalyzeFitTest(unittest.TestCase):
         self.assertIn("Évaluation ignorée : exigence « req-99 » inconnue.", self.analysis["warnings"])
         self.assertEqual(self.analysis["offer"], {"company": "Acme Robotics", "job_title": "Stage Vision par Ordinateur",
                                                   "location": "Lyon", "contract_type": "Stage",
-                                                  "source_url": "https://jobs.example.com/offre/1"})
+                                                  "source_url": "https://jobs.example.com/offre/1",
+                                                  "company_activity": None})     # offre extraite avant ce champ
         self.assertEqual(self.analysis["profile_fingerprint"], profile_fingerprint(self.profile))
         self.assertNotIn("John", self.analysis["profile_fingerprint"])
 
@@ -241,6 +243,67 @@ class AnalyzeFitTest(unittest.TestCase):
             result = analyze_fit(OFFER, self.profile)
         experience = next(i for i in result["requirements"] if i["id"] == "req-5")
         self.assertEqual((experience["duplicate_of"], experience["weight"]), (None, 1))
+
+    def test_an_interest_of_the_profile_is_valid_evidence(self):
+        offer = {**OFFER, "nice_to_have": OFFER["nice_to_have"] + ["Intérêt pour le sport", "Pratique de l'escalade"]}
+        answer = fake_answer()
+        answer["requirements"] += [
+            {"id": "req-9", "duplicate_of": None, "parts": [part("Intérêt pour le sport", "met", proofs=[
+                evidence("interest", "football", "le profil cite le football"), evidence("interest", "Tennis")])]},
+            {"id": "req-10", "duplicate_of": None, "parts": [part("Pratique de l'escalade", "met", proofs=[
+                evidence("interest", "Escalade")])]},                          # absent du profil
+        ]
+        with mock.patch.object(analysis_module, "run_claude", return_value=answer) as claude:
+            result = analyze_fit(offer, self.profile)
+        self.assertIn("interest:\n  - Tennis\n  - Football", claude.call_args.args[1])
+        self.assertIn("interest", ANALYSIS_SCHEMA["properties"]["strengths"]["items"]["properties"]["evidence"]
+                      ["items"]["properties"]["type"]["enum"])
+        items = {item["id"]: item for item in result["requirements"]}
+        self.assertEqual(items["req-9"]["status"], "met")
+        self.assertEqual([(e["type"], e["id"], e["label"]) for e in items["req-9"]["evidence"]],
+                         [("interest", "Football", "Football"), ("interest", "Tennis", "Tennis")])
+        # Une preuve inventée reste refusée : « non documentée », jamais « non remplie »
+        self.assertEqual((items["req-10"]["status"], items["req-10"]["evidence"]), ("not_documented", []))
+
+    def test_a_part_repeating_another_requirement_is_marked_as_duplicate(self):
+        deep_learning = "Expérience pratique en Deep Learning avec PyTorch ou TensorFlow, via des projets"
+        offer = {**OFFER, "must_have": OFFER["must_have"][:2] + [deep_learning],
+                 "experience": "3 ans d'expérience en robotique ; expérience pratique en Deep Learning "
+                               "(PyTorch ou TensorFlow) via des projets"}
+        answer = fake_answer()
+        answer["requirements"][4]["parts"] = [
+            part("3 ans d'expérience en robotique", "missing"),
+            part("expérience pratique en Deep Learning (PyTorch ou TensorFlow) via des projets", "not_documented")]
+        with mock.patch.object(analysis_module, "run_claude", return_value=answer):
+            result = analyze_fit(offer, self.profile)
+        items = {item["id"]: item for item in result["requirements"]}
+        self.assertEqual((items["req-5b"]["duplicate_of"], items["req-5b"]["weight"]), ("req-3", 0))
+        self.assertEqual(items["req-5b"]["status"], "not_documented")                # statut conservé
+        self.assertIsNone(items["req-5a"]["duplicate_of"])                           # critère distinct gardé
+        self.assertIsNone(items["req-3"]["duplicate_of"])
+        self.assertNotIn("req-5b", [w["requirement_id"] for w in result["weaknesses"]])
+
+    def test_the_same_words_in_another_order_are_not_a_duplicate(self):
+        offer = {**OFFER, "must_have": ["Python plutôt que SQL", "Python et SQL", "SQL plutôt que Python"]}
+        answer = fake_answer()
+        for requirement in answer["requirements"][:3]:
+            requirement["parts"] = [part("x", "met", proofs=[evidence("skill", "Python")])]
+        with mock.patch.object(analysis_module, "run_claude", return_value=answer):
+            result = analyze_fit(offer, self.profile)
+        items = {item["id"]: item for item in result["requirements"]}
+        self.assertEqual([items[i]["duplicate_of"] for i in ("req-1", "req-2", "req-3")], [None, None, None])
+
+    def test_company_activity_of_the_offer_is_kept_and_the_summary_is_about_the_role(self):
+        offer = {**OFFER, "company_activity": "Acme fabrique des robots de tri pour la logistique."}
+        with mock.patch.object(analysis_module, "run_claude", return_value=fake_answer()) as claude:
+            result = analyze_fit(offer, self.profile)
+        self.assertEqual(result["offer"]["company_activity"], "Acme fabrique des robots de tri pour la logistique.")
+        prompt = claude.call_args.args[0]
+        self.assertIn("summary: 1-2 sentences on the role and its goal", prompt)
+        self.assertIn("split it into parts so that each keeps its own status", prompt)
+        # Le champ vient de l'extraction de l'offre, qui voit la page entière
+        self.assertIn("company_activity", JOB_SCHEMA["required"])
+        self.assertIn("company_activity: one short sentence", EXTRACTION_PROMPT)
 
     def test_unavailable_score_when_the_offer_has_too_few_requirements(self):
         offer = {**OFFER, "must_have": [], "education": None, "experience": None, "languages": [], "nice_to_have": ["Git"]}

@@ -10,8 +10,7 @@ State on branch `refactor/mvp-cv`. How the implemented parts work: [architecture
   profile → LaTeX PDF with clickable zones; from the CLI or the web interface.
 - **« Mes candidatures »** (formerly « Mes CV », routes `/cvs`): list of applications (job title,
   company, date), preparation from an offer URL with progress, application page with three tabs
-  (« Offre et adéquation », « Préparation à l'entretien », « CV » with the editor and PDF
-  recompilation), CV download, deletion, real creation dates for new applications. Interface only:
+  (« Vue d'ensemble », « CV » with the editor and PDF recompilation, « Entretien »), CV download, deletion, real creation dates for new applications. Interface only:
   one application is still one CV folder.
 - **Fit analysis**: offer explained, requirements rated with verified evidence, strengths and
   weaknesses (score computed but not shown). Interview content comes only from the deep preparation.
