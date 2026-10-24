@@ -362,15 +362,12 @@ def _check_new_items(doc: dict, current: dict, path: Path) -> None:
                           load_profile(path).data)
 
 
-@router.put("/{cv_id}")
-def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_path),
-              base: Path = Depends(applications_dir), rebuilder=Depends(cv_rebuilder)):
+def save_cv_document(cv_id: str, folder: Path, doc: dict, path: Path, rebuilder) -> dict:
     """
-    Enregistre le CV modifié et recompile le PDF. Le document est validé avant toute écriture ;
-    si la compilation échoue ou si le PDF dépasse une page, cv.json, les sections, le PDF et
-    layout.json précédents sont restaurés (422).
+    Enregistre un CV modifié (éditeur ou assistant) et recompile le PDF. Le document est validé avant
+    toute écriture ; si la compilation échoue ou si le PDF dépasse une page, cv.json, les sections, le
+    PDF et layout.json précédents sont restaurés (422). Lève ApiError ; renvoie la réponse de PUT.
     """
-    folder = _cv_folder(cv_id, base)
     if not (folder / DOCUMENT_FILE).is_file():
         raise ApiError(409, "CV non modifiable", ["ce CV a été créé avant cv.json : il ne peut pas être modifié."])
     if not LOCKS.try_acquire(cv_id):
@@ -418,6 +415,13 @@ def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_pa
     finally:
         LOCKS.release(cv_id)
         shutil.rmtree(backup, ignore_errors=True)
+
+
+@router.put("/{cv_id}")
+def update_cv(cv_id: str, doc: dict = Body(...), path: Path = Depends(profile_path),
+              base: Path = Depends(applications_dir), rebuilder=Depends(cv_rebuilder)):
+    """Enregistre le CV modifié dans l'éditeur et recompile le PDF (voir save_cv_document)."""
+    return save_cv_document(cv_id, _cv_folder(cv_id, base), doc, path, rebuilder)
 
 
 # ---------- Analyse de correspondance offre / profil ----------

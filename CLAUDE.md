@@ -8,7 +8,8 @@ explain the offer and analyse the fit with the candidate profile.
 - Implemented: candidate profile + CV import (« Candidat »); « Mes candidatures » (routes `/cvs`,
   formerly « Mes CV »): preparing an application from a URL (offer analysis + tailored CV), list,
   application page with three tabs (« Vue d'ensemble »: offer and profile for the job, « CV »:
-  editing of `cv.json` with PDF recompilation and clickable zones, « Entretien »), deletion; deep interview
+  editing of `cv.json` with PDF recompilation and clickable zones, « Vérifier » and an « Assistant IA »
+  chat that discusses the CV and edits it on explicit request, « Entretien »), deletion; deep interview
   preparation on demand (`interview/`, `preparation.json`, `company_research.json`). One application = one
   CV folder for now: the interface uses the application vocabulary, the code and API keep `cv`.
 - Not implemented: application tracking (statuses, board), cover letters, « Paramètres » (disabled
@@ -38,12 +39,15 @@ Backend: Python 3.12 (`.venv`), FastAPI, organised by feature.
   (creation/update dates), `cli.py` (`python -m cv.cli "<URL>"`), `template/`.
 - `interview/` — `research.py` (company research, web, sourced facts), `preparation.py`
   (personalised preparation, validation), `files.py` (atomic JSON).
+- `assistant/` — `chat.py` (CV assistant: conversation in `assistant.json`, bounded context, one
+  model call per message, targeted changes checked by Python); routes in `api/assistant.py`, saved
+  through `cvs.save_cv_document` like the editor.
 - `llm/claude_cli.py` — the only call to Claude (`run_claude` for existing calls, `run_claude_task`
   for light calls with optional web tools); `llm/structured.py` — provider-neutral facade used by
   new modules (`generate_structured`).
 - A CV lives in `cv/applications/<cv_id>/`: cv.json, offer.json, selection.json, analysis.json,
-  metadata.json, sections/, build/ (PDF, layout.json), optionally preparation.json and
-  company_research.json. CVs without cv.json are read-only (409).
+  metadata.json, sections/, build/ (PDF, layout.json), optionally preparation.json,
+  company_research.json and assistant.json. CVs without cv.json are read-only (409).
 
 Frontend: `frontend/` (Lovable, TanStack Start/Router, React 19, TanStack Query, shadcn/ui,
 Vitest). Rules in `frontend/AGENTS.md`.
@@ -69,6 +73,9 @@ Vitest). Rules in `frontend/AGENTS.md`.
   an API key or API billing, never `--bare`; the auth check runs before each call.
 - Interview preparation: at most two Claude calls, never automatic, never regenerated; reading it
   never calls Claude; the web research never receives the candidate profile.
+- CV assistant: one Claude call per message, no tools; opening or reading the chat never calls it.
+  It changes cv.json only on explicit request, through allowed paths checked by Python, never
+  over unsaved manual edits; the change summary and "saved" come from the backend, not the model.
 
 ## Tests (always fictional data)
 - Never call Claude for real (patch `run_claude`), never read or write the real profile or real

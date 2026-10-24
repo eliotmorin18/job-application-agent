@@ -7,13 +7,14 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LayoutZone } from "../adapters";
+import "./pdfTextLayer.css";
 
 const ZONE_LABELS: Record<string, string> = {
   profile: "le profil",
@@ -47,6 +48,7 @@ function PdfPageView({
   selectedZoneId,
   onSelectZone,
   pageRef,
+  textSelectable,
 }: {
   doc: PDFDocumentProxy;
   pageNumber: number;
@@ -55,8 +57,39 @@ function PdfPageView({
   selectedZoneId: string | null;
   onSelectZone: (zone: LayoutZone) => void;
   pageRef: (el: HTMLDivElement | null) => void;
+  textSelectable: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textRef = useRef<HTMLDivElement>(null);
+
+  // Selectable text (pdf.js TextLayer) over the canvas, only when asked: no zone is shown then.
+  useEffect(() => {
+    const container = textRef.current;
+    if (!textSelectable || !container) return;
+    let cancelled = false;
+    let layer: { cancel: () => void } | null = null;
+    (async () => {
+      const [{ TextLayer }, page] = await Promise.all([
+        import("pdfjs-dist"),
+        doc.getPage(pageNumber),
+      ]);
+      if (cancelled) return;
+      container.replaceChildren();
+      const textLayer = new TextLayer({
+        textContentSource: page.streamTextContent(),
+        container,
+        viewport: page.getViewport({ scale }),
+      });
+      layer = textLayer;
+      await textLayer.render();
+    })().catch(() => {
+      // a cancelled or replaced rendering: the canvas is still shown, only the selection is missing
+    });
+    return () => {
+      cancelled = true;
+      layer?.cancel();
+    };
+  }, [doc, pageNumber, scale, textSelectable]);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
@@ -92,9 +125,21 @@ function PdfPageView({
     <div
       ref={pageRef}
       className="relative mx-auto bg-white shadow-lift"
-      style={{ width: size?.w, height: size?.h }}
+      style={
+        {
+          width: size?.w,
+          height: size?.h,
+          // Read by the text layer (pdf.js): CSS pixels per PDF point, no rounding
+          "--total-scale-factor": scale,
+          "--scale-round-x": "1px",
+          "--scale-round-y": "1px",
+        } as CSSProperties
+      }
     >
       <canvas ref={canvasRef} className="block" />
+      {textSelectable && (
+        <div ref={textRef} className="cv-pdf-text-layer" data-testid="pdf-text-layer" />
+      )}
       {size &&
         zones.map((zone, index) => {
           const selected = zone.id === selectedZoneId;
@@ -137,6 +182,7 @@ export function PdfPreview({
   onSelectZone,
   busy = null,
   note = null,
+  textSelectable = false,
 }: {
   pdfUrl: string;
   zones: LayoutZone[];
@@ -146,6 +192,8 @@ export function PdfPreview({
   busy?: string | null;
   /** Shown in the toolbar (e.g. "Dernière version enregistrée" when the draft differs). */
   note?: string | null;
+  /** Reader mode: selectable, copyable text and no clickable zone (« Assistant IA »). */
+  textSelectable?: boolean;
 }) {
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -323,7 +371,8 @@ export function PdfPreview({
                   doc={doc}
                   pageNumber={i + 1}
                   scale={scale}
-                  zones={busy ? [] : zones.filter((z) => z.page === i + 1)}
+                  zones={busy || textSelectable ? [] : zones.filter((z) => z.page === i + 1)}
+                  textSelectable={textSelectable}
                   selectedZoneId={selectedZoneId}
                   onSelectZone={onSelectZone}
                   pageRef={(el) => {

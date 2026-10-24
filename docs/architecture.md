@@ -81,8 +81,11 @@ layout are restored (422). On success
 **CV tab (frontend).** Left panel / PDF preview split that the user drags (`react-resizable-panels`,
 40 / 60 by default, editor 30–65 % and at least 360 px). The left panel shows either the editor
 (« Modifier »: save bar on top, section tabs that wrap with the panel width, skills reordered by
-drag and drop or keyboard in `SortableTagInput`, no new dependency) or the check (« Vérifier »,
-`CvCheckPanel`). The check is local and deterministic (`adapters.cvChecks`): up to six requirements
+drag and drop or keyboard in `SortableTagInput`, no new dependency), the check (« Vérifier »,
+`CvCheckPanel`) or the chat (« Assistant IA », `CvAssistantPanel`, mounted on first use then kept). In
+« Assistant IA » the preview is a plain reader: no zone, no highlight, no PDF → editor navigation,
+and a pdf.js `TextLayer` (minimal `.textLayer` rules in `pdfTextLayer.css`) makes the text
+selectable for copy and paste into the chat; « Modifier » and « Vérifier » keep the zones only. The check is local and deterministic (`adapters.cvChecks`): up to six requirements
 the profile documents (met or partial), essential ones first, without conditions or spoken languages;
 the offer's terms are searched word for word in the draft cv.json (alternatives only when the offer
 writes « ou »/« or »/« / »), and the evidence entries of the analysis are matched with the CV by
@@ -90,6 +93,22 @@ writes « ou »/« or »/« / »), and the evidence entries of the analysis are 
 profile »). A point highlights its section or entry zone of `layout.json` when it exists (never a
 word), otherwise « Emplacement non identifié »; « Modifier cette section » switches to the editor.
 No Claude call, no score, nothing written.
+
+**CV assistant (« Assistant IA »).** `assistant/chat.py` + `api/assistant.py`. The conversation of an
+application is `assistant.json` (messages, at most 200 kept, and the CV before the assistant's last
+change, for undo). `GET /api/cvs/{id}/assistant` only reads it. `POST …/assistant/messages` makes one
+call through `llm/structured.generate_structured` (subscription, no tools, no web) with the saved
+cv.json, the profile (only source of truth), part of offer.json and the recent messages (16 at most,
+16 000 characters, long messages clipped); the CV, offer and conversation are framed as data, not
+instructions. The model answers `{reply, changes, confirmed_removal}`: `changes` is empty for a
+discussion; otherwise each change targets an allowed path (`header.summary`, bullets of an entry or
+one bullet, `skills[i].items` / `.label`, `interests`). Python applies them on a copy, all or
+nothing: unknown path or index, skill or interest absent from the profile, number absent from the
+profile and the CV, or more than one element removed without confirmation → not applied. The new
+CV is saved by `cvs.save_cv_document` (same validation, compilation, one page and restore as the
+editor); the change summary shown under the reply is computed by Python. Changes are refused when
+the editor has unsaved edits (`allow_changes: false`) or the CV changed since `base_updated_at`.
+`POST …/assistant/undo` restores the previous CV only if the CV is still the one the assistant saved.
 
 **Fit analysis.** `cv/analysis.py`, one Claude call: Python fixes the list of requirements from
 `offer.json`; Claude rates each one (`met`, `partial`, `not_documented`, `missing`), writes the

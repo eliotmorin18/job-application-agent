@@ -30,13 +30,14 @@ from candidate.import_cv import CVImportError, import_cv
 from candidate.manager import ITEM_KINDS, ItemError
 from candidate.profile import ProfileError, load_profile
 from candidate.review_import import ReviewError, review_import
-from api import cvs
+from api import assistant, cvs
 from api.common import ApiError, profile_path
 from cv.document import CVDocumentError
 
 
 app = FastAPI(title="Job Application Agent")
 app.include_router(cvs.router)
+app.include_router(assistant.router)
 
 ITEM_SECTIONS = {kind.section: kind for kind in ITEM_KINDS.values()}
 ADD_FUNCTIONS = {"experiences": manager.add_experience, "projects": manager.add_project, "education": manager.add_education}

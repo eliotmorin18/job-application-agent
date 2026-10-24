@@ -1,6 +1,16 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
-import { Check, FileX2, ListChecks, Loader2, Lock, Pencil, RefreshCw, Save } from "lucide-react";
+import {
+  Check,
+  FileX2,
+  ListChecks,
+  Loader2,
+  Lock,
+  MessageSquare,
+  Pencil,
+  RefreshCw,
+  Save,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -12,7 +22,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ConfirmDialog, EmptyState } from "@/features/candidate/components/common";
 import { profileQuery } from "@/features/candidate/hooks";
 import { ApiError, cvApi } from "@/services/api/cvApi";
-import type { CvDocument, CvSummary } from "@/services/api/cvTypes";
+import type { CvDocument, CvSummary, CvUpdateResult } from "@/services/api/cvTypes";
 import {
   EDITOR_MAX_PERCENT,
   cleanDocument,
@@ -25,6 +35,7 @@ import {
   type LayoutZone,
 } from "../adapters";
 import { cvDetailQuery, cvLayoutQuery, cvListQuery, errorMessage } from "../hooks";
+import { CvAssistantPanel } from "./CvAssistantPanel";
 import { CvCheckPanel, type CheckFocus } from "./CvCheckPanel";
 import { CvEditorPanel } from "./CvEditorPanel";
 import { PdfPreview } from "./PdfPreview";
@@ -40,6 +51,9 @@ function useEditorMinSize(group: HTMLDivElement | null): number {
   }, [group]);
   return editorMinPercent(width);
 }
+
+/** Left panel: « Modifier » (editor), « Vérifier » (check of the offer's points), « Assistant IA ». */
+type Mode = "edit" | "check" | "assistant";
 
 const isItemSection = (section: string): section is ItemSection =>
   section === "experiences" || section === "education" || section === "projects";
@@ -97,7 +111,9 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
   const [saving, setSaving] = useState(false);
   // Left panel: the editor (« Modifier », default) or the check of the offer's points (« Vérifier »).
   // The draft lives here: switching never loses unsaved changes.
-  const [mode, setMode] = useState<"edit" | "check">("edit");
+  const [mode, setMode] = useState<Mode>("edit");
+  // The assistant is mounted the first time it is opened, then kept (typed text, scroll).
+  const [assistantOpened, setAssistantOpened] = useState(false);
   const [checkFocus, setCheckFocus] = useState<CheckFocus | null>(null);
   const [splitGroup, setSplitGroup] = useState<HTMLDivElement | null>(null);
   const editorMinSize = useEditorMinSize(splitGroup);
@@ -152,20 +168,24 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
       </div>
     );
 
+  /** A saved version (editor or assistant): new summary (new PDF URL and layout key), new document. */
+  const applySaved = (result: CvUpdateResult, from: CvDocument) => {
+    qc.setQueryData(cvListQuery.queryKey, (list: CvSummary[] | undefined) =>
+      list?.map((item) => (item.id === cv.id ? result.cv : item)),
+    );
+    qc.setQueryData(cvDetailQuery(cv.id).queryKey, (old) =>
+      old ? { ...old, cv: result.cv, document: result.document } : old,
+    );
+    setDraft(structuredClone(result.document));
+    setSelection((current) => translate(current, from, result.document));
+    void qc.invalidateQueries({ queryKey: cvListQuery.queryKey, exact: true });
+  };
+
   const save = async () => {
     setSaving(true);
     try {
       const result = await cvApi.updateCv(cv.id, cleanDocument(draft));
-      // New summary (new updated_at => new PDF URL and new layout key), new saved document.
-      qc.setQueryData(cvListQuery.queryKey, (list: CvSummary[] | undefined) =>
-        list?.map((item) => (item.id === cv.id ? result.cv : item)),
-      );
-      qc.setQueryData(cvDetailQuery(cv.id).queryKey, (old) =>
-        old ? { ...old, cv: result.cv, document: result.document } : old,
-      );
-      setDraft(structuredClone(result.document));
-      setSelection((current) => translate(current, draft, result.document));
-      void qc.invalidateQueries({ queryKey: cvListQuery.queryKey, exact: true });
+      applySaved(result, draft);
       // A version longer than one page is refused by the backend (422): the previous PDF is kept.
       toast.success("CV enregistré — le PDF a été recompilé.");
     } catch (e) {
@@ -187,7 +207,9 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
     checkFocus?.location && hasZone(checkFocus.location)
       ? zoneOf(checkFocus.location.selection)
       : null;
-  const selectedZoneId = mode === "check" ? checkZoneId : editorZoneId;
+  // « Assistant IA »: the PDF is a plain reader (selectable text to copy into the chat), no zone.
+  const reader = mode === "assistant";
+  const selectedZoneId = reader ? null : mode === "check" ? checkZoneId : editorZoneId;
   // PDF → editor in both modes: a click on a zone opens that part in the editor.
   const onSelectZone = (zone: LayoutZone) => {
     setMode("edit");
@@ -260,9 +282,10 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
   const preview = cv.has_pdf ? (
     <PdfPreview
       pdfUrl={cvApi.pdfUrl(cv.id, version)}
-      zones={layoutQuery.isFetching ? [] : zones}
+      zones={layoutQuery.isFetching || reader ? [] : zones}
       selectedZoneId={selectedZoneId}
-      onSelectZone={onSelectZone}
+      onSelectZone={reader ? () => undefined : onSelectZone}
+      textSelectable={reader}
       busy={saving ? "Recompilation du PDF…" : null}
       note={
         dirty
@@ -286,7 +309,11 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
       size="sm"
       variant="outline"
       value={mode}
-      onValueChange={(value) => value && setMode(value as "edit" | "check")}
+      onValueChange={(value) => {
+        if (!value) return;
+        setMode(value as Mode);
+        if (value === "assistant") setAssistantOpened(true);
+      }}
       aria-label="Contenu du panneau gauche"
       className="justify-start"
     >
@@ -297,6 +324,10 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
       <ToggleGroupItem value="check" className="h-7 gap-1.5 px-2.5 text-xs">
         <ListChecks className="size-3.5" />
         Vérifier
+      </ToggleGroupItem>
+      <ToggleGroupItem value="assistant" className="h-7 gap-1.5 px-2.5 text-xs">
+        <MessageSquare className="size-3.5" />
+        Assistant IA
       </ToggleGroupItem>
     </ToggleGroup>
   );
@@ -319,6 +350,18 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
             onFocus={setCheckFocus}
             onEdit={editLocation}
           />
+        )}
+        {assistantOpened && (
+          <div hidden={mode !== "assistant"} className="h-full">
+            <CvAssistantPanel
+              cv={cv}
+              dirty={dirty}
+              onSaved={(result) => {
+                applySaved(result, saved);
+                toast.success("CV enregistré par l'assistant — le PDF a été recompilé.");
+              }}
+            />
+          </div>
         )}
       </div>
     </div>

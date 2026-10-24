@@ -5,7 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { CvEditorTab } from "@/features/cvs/components/CvEditorTab";
 import { PdfPreview } from "@/features/cvs/components/PdfPreview";
-import type { CompletedAnalysis, CvDocument, Evidence } from "@/services/api/cvTypes";
+import type {
+  AssistantMessage,
+  CompletedAnalysis,
+  CvDocument,
+  Evidence,
+} from "@/services/api/cvTypes";
 import {
   analysisFixture,
   documentFixture,
@@ -14,20 +19,46 @@ import {
   summary,
 } from "./fixtures/cvFixtures";
 
-// pdf.js is replaced by a one-page A4 document: the preview logic runs, nothing is drawn.
+// pdf.js is replaced by a one-page A4 document: the preview logic runs, nothing is drawn. Its text
+// layer writes the page's text in spans, as the real TextLayer does (transparent over the canvas).
 const pdf = vi.hoisted(() => {
   const page = {
-    getViewport: ({ scale }: { scale: number }) => ({ width: 595 * scale, height: 842 * scale }),
+    getViewport: ({ scale }: { scale: number }) => ({
+      width: 595 * scale,
+      height: 842 * scale,
+      scale,
+    }),
     render: () => ({ promise: Promise.resolve(), cancel: () => undefined }),
+    streamTextContent: () => ({ items: [{ str: "Pipeline Spark fictif." }] }),
   };
+  const textLayers: { container: HTMLElement }[] = [];
+  class TextLayer {
+    container: HTMLElement;
+    constructor({ container }: { container: HTMLElement }) {
+      this.container = container;
+      textLayers.push(this);
+    }
+    async render() {
+      const span = document.createElement("span");
+      span.textContent = "Pipeline Spark fictif.";
+      this.container.append(span);
+    }
+    cancel() {}
+  }
   return {
+    textLayers,
+    TextLayer,
     getDocument: vi.fn(() => ({
       promise: Promise.resolve({ numPages: 1, getPage: async () => page }),
       destroy: async () => undefined,
     })),
   };
 });
-vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: pdf.getDocument }));
+vi.mock("pdfjs-dist", () => ({
+  GlobalWorkerOptions: {},
+  getDocument: pdf.getDocument,
+  TextLayer: pdf.TextLayer,
+}));
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
 // Leaving with unsaved changes is guarded by the router: not under test here.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -769,5 +800,348 @@ describe("CvEditorTab — « Vérifier »", () => {
     fireEvent.click(mobile.getByRole("radio", { name: "Vérifier" }));
     expect(await mobile.findByRole("region", { name: "Vérifier le CV" })).toBeInTheDocument();
     expect(mobile.getByRole("tab", { name: "Aperçu" })).toBeInTheDocument();
+  });
+});
+
+// ---------- « Assistant IA » ----------
+
+const ASSISTANT = `${CV}/assistant`;
+
+function message(
+  role: "user" | "assistant",
+  text: string,
+  change?: AssistantMessage["change"],
+): AssistantMessage {
+  return {
+    id: `${role}-${text}`,
+    role,
+    text,
+    created_at: "2026-10-24T10:00:00",
+    ...(change ? { change } : {}),
+  };
+}
+
+async function openAssistant() {
+  await editor();
+  fireEvent.click(desktopLeft().getByRole("radio", { name: "Assistant IA" }));
+  return within(await desktopLeft().findByRole("region", { name: "Assistant IA" }));
+}
+
+describe("CvEditorTab — Assistant IA", () => {
+  it("opens without calling the assistant, and only once its mode is chosen", async () => {
+    const calls = backend({ [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }] });
+    renderEditor();
+    await editor();
+    expect(calls.some((c) => c.key.includes("/assistant"))).toBe(false);
+    const chat = await openAssistant();
+    expect(await chat.findByText(/Discute de ton CV avec l'assistant/)).toBeInTheDocument();
+    expect(calls.filter((c) => c.key.includes("/assistant")).map((c) => c.key)).toEqual([
+      `GET ${ASSISTANT}`,
+    ]);
+    expect(calls.some((c) => c.key.startsWith("POST") || c.key.startsWith("PUT"))).toBe(false);
+  });
+
+  it("sends with Enter (Shift + Enter is a new line), shows the wait, then the reply", async () => {
+    const calls = backend({
+      [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }],
+      [`POST ${ASSISTANT}/messages`]: [
+        200,
+        {
+          messages: [
+            message("user", "Mon résumé est trop générique.\nTu en penses quoi ?"),
+            message("assistant", "Il ne cite pas l'offre : je te propose deux versions."),
+          ],
+          can_undo: false,
+          saved: null,
+        },
+      ],
+    });
+    renderEditor();
+    const chat = await openAssistant();
+    const input = chat.getByRole("textbox", { name: "Message à l'assistant" });
+    fireEvent.change(input, { target: { value: "Mon résumé est trop générique." } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(calls.some((c) => c.key.startsWith("POST"))).toBe(false);
+    fireEvent.change(input, {
+      target: { value: "Mon résumé est trop générique.\nTu en penses quoi ?" },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(chat.getByText("L'assistant rédige sa réponse…")).toBeInTheDocument();
+    expect(
+      await chat.findByText("Il ne cite pas l'offre : je te propose deux versions."),
+    ).toBeInTheDocument();
+    expect(chat.queryByText("L'assistant rédige sa réponse…")).not.toBeInTheDocument();
+    expect(input).toHaveValue("");
+    const post = calls.find((c) => c.key === `POST ${ASSISTANT}/messages`)!;
+    expect(post.body).toEqual({
+      text: "Mon résumé est trop générique.\nTu en penses quoi ?",
+      allow_changes: true,
+      base_updated_at: summary().updated_at,
+    });
+    expect(calls.some((c) => c.key.startsWith("PUT"))).toBe(false);
+  });
+
+  it("shows what the assistant saved and updates the editor with it", async () => {
+    const saved = documentFixture();
+    saved.header = { ...saved.header, summary: "Résumé validé dans la conversation." };
+    backend({
+      [`GET ${ASSISTANT}`]: [
+        200,
+        {
+          messages: [message("assistant", "Proposition : « Résumé validé dans la conversation. »")],
+          can_undo: false,
+        },
+      ],
+      [`POST ${ASSISTANT}/messages`]: [
+        200,
+        {
+          messages: [
+            message("assistant", "Proposition : « Résumé validé dans la conversation. »"),
+            message("user", "Ok, mets cette version."),
+            message("assistant", "Je mets cette version dans le CV.", {
+              status: "applied",
+              summary: ["Résumé (profil) modifié."],
+              problems: [],
+            }),
+          ],
+          can_undo: true,
+          saved: {
+            cv: summary({ updated_at: 1792000300 }),
+            document: saved,
+            pages: 1,
+            fits_one_page: true,
+            has_layout: true,
+          },
+        },
+      ],
+    });
+    const success = vi.spyOn(toast, "success").mockImplementation(() => "");
+    renderEditor();
+    const chat = await openAssistant();
+    fireEvent.change(chat.getByRole("textbox", { name: "Message à l'assistant" }), {
+      target: { value: "Ok, mets cette version." },
+    });
+    fireEvent.click(chat.getByRole("button", { name: "Envoyer" }));
+    expect(await chat.findByText("CV enregistré, PDF recompilé")).toBeInTheDocument();
+    expect(chat.getByText("Résumé (profil) modifié.")).toBeInTheDocument();
+    expect(chat.getByRole("button", { name: /Annuler la dernière modification/ })).toBeEnabled();
+    expect(success).toHaveBeenCalledWith("CV enregistré par l'assistant — le PDF a été recompilé.");
+
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Modifier" }));
+    const panel = await editor();
+    expect(panel.getByDisplayValue("Résumé validé dans la conversation.")).toBeInTheDocument();
+    expect(panel.getByRole("status")).toHaveTextContent("Enregistré");
+  });
+
+  it("never lets the assistant overwrite unsaved manual changes", async () => {
+    const calls = backend({
+      [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: true }],
+      [`POST ${ASSISTANT}/messages`]: [
+        200,
+        {
+          messages: [
+            message("user", "Mets cette version."),
+            message("assistant", "Je mets cette version dans le CV.", {
+              status: "not_applied",
+              summary: [],
+              problems: ["tu as des modifications non enregistrées dans « Modifier »."],
+            }),
+          ],
+          can_undo: true,
+          saved: null,
+        },
+      ],
+    });
+    renderEditor();
+    const panel = await editor();
+    fireEvent.change(panel.getByDisplayValue("Alex Exemple"), { target: { value: "Alex Manuel" } });
+    const chat = await openAssistant();
+    expect(
+      chat.getByText(/ne modifiera pas le CV avant que tu les enregistres/),
+    ).toBeInTheDocument();
+    expect(
+      await chat.findByRole("button", { name: /Annuler la dernière modification/ }),
+    ).toBeDisabled();
+    fireEvent.change(chat.getByRole("textbox", { name: "Message à l'assistant" }), {
+      target: { value: "Mets cette version." },
+    });
+    fireEvent.click(chat.getByRole("button", { name: "Envoyer" }));
+    expect(await chat.findByText("Modification non appliquée")).toBeInTheDocument();
+    expect(
+      (calls.find((c) => c.key.startsWith("POST"))!.body as { allow_changes: boolean })
+        .allow_changes,
+    ).toBe(false);
+
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Modifier" }));
+    const back = await editor();
+    expect(back.getByDisplayValue("Alex Manuel")).toBeInTheDocument();
+    expect(back.getByRole("status")).toHaveTextContent("Modifications non enregistrées");
+  });
+
+  it("undoes the assistant's last change", async () => {
+    const before = documentFixture();
+    const calls = backend({
+      [`GET ${ASSISTANT}`]: [
+        200,
+        { messages: [message("assistant", "Je mets cette version.")], can_undo: true },
+      ],
+      [`POST ${ASSISTANT}/undo`]: [
+        200,
+        {
+          messages: [
+            message("assistant", "Je mets cette version."),
+            message("assistant", "J'ai annulé ma dernière modification.", {
+              status: "undone",
+              summary: ["Résumé (profil) modifié."],
+              problems: [],
+            }),
+          ],
+          can_undo: false,
+          saved: {
+            cv: summary({ updated_at: 1792000400 }),
+            document: before,
+            pages: 1,
+            fits_one_page: true,
+            has_layout: true,
+          },
+        },
+      ],
+    });
+    vi.spyOn(toast, "success").mockImplementation(() => "");
+    renderEditor();
+    const chat = await openAssistant();
+    fireEvent.click(await chat.findByRole("button", { name: /Annuler la dernière modification/ }));
+    expect(await chat.findByText("Modification annulée")).toBeInTheDocument();
+    expect(
+      chat.queryByRole("button", { name: /Annuler la dernière modification/ }),
+    ).not.toBeInTheDocument();
+    expect(calls.find((c) => c.key === `POST ${ASSISTANT}/undo`)!.body).toEqual({
+      allow_changes: true,
+      base_updated_at: summary().updated_at,
+    });
+  });
+
+  it("explains a failure and keeps the typed message", async () => {
+    backend({
+      [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }],
+      [`POST ${ASSISTANT}/messages`]: [
+        502,
+        { detail: { message: "L'assistant n'a pas pu répondre", problems: ["délai dépassé"] } },
+      ],
+    });
+    renderEditor();
+    const chat = await openAssistant();
+    const input = chat.getByRole("textbox", { name: "Message à l'assistant" });
+    fireEvent.change(input, { target: { value: "Raccourcis ma première puce." } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await chat.findByRole("alert")).toHaveTextContent(/L'assistant n'a pas pu répondre/);
+    expect(input).toHaveValue("Raccourcis ma première puce.");
+  });
+
+  it("keeps the conversation and the typed text across modes and reloads", async () => {
+    const history = {
+      messages: [
+        message("user", "Bonjour"),
+        message("assistant", "Bonjour ! Que veux-tu améliorer ?"),
+      ],
+      can_undo: false,
+    };
+    backend({ [`GET ${ASSISTANT}`]: [200, history] });
+    const { unmount } = renderEditor();
+    let chat = await openAssistant();
+    expect(await chat.findByText("Bonjour ! Que veux-tu améliorer ?")).toBeInTheDocument();
+    fireEvent.change(chat.getByRole("textbox", { name: "Message à l'assistant" }), {
+      target: { value: "Brouillon de message" },
+    });
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Vérifier" }));
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Assistant IA" }));
+    chat = within(desktopLeft().getByRole("region", { name: "Assistant IA" }));
+    expect(chat.getByRole("textbox", { name: "Message à l'assistant" })).toHaveValue(
+      "Brouillon de message",
+    );
+    expect(chat.getByText("Bonjour ! Que veux-tu améliorer ?")).toBeInTheDocument();
+
+    // Reload: the conversation comes back from assistant.json
+    unmount();
+    backend({ [`GET ${ASSISTANT}`]: [200, history] });
+    renderEditor();
+    chat = await openAssistant();
+    expect(await chat.findByText("Bonjour ! Que veux-tu améliorer ?")).toBeInTheDocument();
+  });
+});
+
+describe("CvEditorTab — PDF in « Assistant IA »", () => {
+  const zoneName = "Sélectionner l'élément 1 dans les expériences";
+
+  it("is a plain reader: no frame, selectable text, a click changes no mode", async () => {
+    backend({ [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }] });
+    renderEditor();
+    await editor();
+    const preview = within(document.getElementById("cv-preview")!);
+    // « Modifier »: clickable frames, no text layer
+    expect(await preview.findByRole("button", { name: zoneName })).toBeInTheDocument();
+    expect(preview.queryByTestId("pdf-text-layer")).not.toBeInTheDocument();
+
+    await openAssistant();
+    expect(preview.queryByRole("button", { name: /^Sélectionner/ })).not.toBeInTheDocument();
+    expect(document.getElementById("cv-preview")!.querySelector(".ring-2, .ring-1")).toBeNull();
+    const layer = await preview.findByTestId("pdf-text-layer");
+    expect(await within(layer).findByText("Pipeline Spark fictif.")).toBeInTheDocument();
+    expect(layer).toHaveClass("cv-pdf-text-layer");
+    // The page wrapper gives the text layer the zoom of the canvas
+    expect(layer.parentElement!.style.getPropertyValue("--total-scale-factor")).not.toBe("");
+
+    fireEvent.mouseDown(layer);
+    fireEvent.click(within(layer).getByText("Pipeline Spark fictif."));
+    fireEvent.mouseUp(layer);
+    expect(desktopLeft().getByRole("radio", { name: "Assistant IA" })).toHaveAttribute(
+      "data-state",
+      "on",
+    );
+    expect(desktopLeft().getByRole("region", { name: "Assistant IA" })).toBeVisible();
+
+    // Zoom stays available and keeps the text layer
+    fireEvent.click(preview.getByRole("button", { name: "Zoom avant" }));
+    expect(await preview.findByTestId("pdf-text-layer")).toBeInTheDocument();
+  });
+
+  it("brings the frames back in « Modifier » and the highlight in « Vérifier »", async () => {
+    backend({
+      [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }],
+      [`GET ${CV}/analysis`]: [200, { ...checkAnalysis(), running: false }],
+    });
+    renderEditor();
+    await openAssistant();
+    const preview = within(document.getElementById("cv-preview")!);
+    expect(preview.queryByRole("button", { name: zoneName })).not.toBeInTheDocument();
+
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Vérifier" }));
+    const check = within(await desktopLeft().findByRole("region", { name: "Vérifier le CV" }));
+    fireEvent.click(await check.findByRole("button", { name: /^Maîtrise de Spark/ }));
+    expect(await preview.findByRole("button", { name: zoneName })).toHaveClass("ring-2");
+    expect(preview.queryByTestId("pdf-text-layer")).not.toBeInTheDocument();
+
+    fireEvent.click(desktopLeft().getByRole("radio", { name: "Modifier" }));
+    fireEvent.click(
+      preview.getByRole("button", { name: "Sélectionner l'élément 2 dans les expériences" }),
+    );
+    expect((await editor()).getByDisplayValue("Assistant")).toBeInTheDocument();
+  });
+
+  it("takes a passage pasted from the PDF in the message", async () => {
+    backend({ [`GET ${ASSISTANT}`]: [200, { messages: [], can_undo: false }] });
+    renderEditor();
+    const chat = await openAssistant();
+    const input = chat.getByRole("textbox", { name: "Message à l'assistant" });
+    // Browser paste: the textarea receives the copied text (native behaviour, nothing intercepted)
+    const paste = new Event("paste", { bubbles: true, cancelable: true });
+    input.dispatchEvent(paste);
+    expect(paste.defaultPrevented).toBe(false);
+    fireEvent.change(input, {
+      target: { value: "« Pipeline Spark fictif. » : tu en penses quoi ?" },
+    });
+    expect(input).toHaveValue("« Pipeline Spark fictif. » : tu en penses quoi ?");
+    expect(chat.getByRole("button", { name: "Envoyer" })).toBeEnabled();
   });
 });

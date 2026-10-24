@@ -33,6 +33,10 @@ export const cvApi: CvApi = {
   getPreparation: (id) => orNull(request<CvPreparation>("GET", `/cvs/${segment(id)}/preparation`)),
   startPreparation: (id) => request("POST", `/cvs/${segment(id)}/preparation`),
   getTask: (taskId) => request("GET", `/cvs/tasks/${segment(taskId)}`),
+  getAssistant: (id) => request("GET", `/cvs/${segment(id)}/assistant`),
+  sendAssistantMessage: (id, text, guard) =>
+    request("POST", `/cvs/${segment(id)}/assistant/messages`, { text, ...guard }),
+  undoAssistant: (id, guard) => request("POST", `/cvs/${segment(id)}/assistant/undo`, guard),
 };
 
 export { ApiError } from "./httpClient";

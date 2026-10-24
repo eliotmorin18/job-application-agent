@@ -11,6 +11,14 @@ export const cvListQuery = queryOptions({
 const retryUnlessClientError = (count: number, error: Error) =>
   !(error instanceof ApiError && error.status >= 400 && error.status < 500) && count < 2;
 
+/** The CV assistant's conversation, read from assistant.json (no Claude call). */
+export const cvAssistantQuery = (id: string) =>
+  queryOptions({
+    queryKey: ["cvs", id, "assistant"],
+    queryFn: () => cvApi.getAssistant(id),
+    retry: retryUnlessClientError,
+  });
+
 export const cvDetailQuery = (id: string) =>
   queryOptions({
     queryKey: ["cvs", id, "detail"],

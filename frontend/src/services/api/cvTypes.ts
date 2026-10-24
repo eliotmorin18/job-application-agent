@@ -289,6 +289,43 @@ export interface Preparation {
 /** GET /api/cvs/{cv_id}/preparation (`running`: a preparation task is in progress for this CV). */
 export type CvPreparation = Preparation & { running: boolean };
 
+// ---------- assistant.json (assistant/chat.py, api/assistant.py) ----------
+
+/** What happened to the changes the assistant asked for in a reply (computed by Python, not the model). */
+export interface AssistantChange {
+  status: "applied" | "not_applied" | "failed" | "undone";
+  /** What really changed in the CV ("Résumé (profil) modifié.", "Compétences · Outils : retrait de Git."). */
+  summary: string[];
+  problems: string[];
+}
+
+export interface AssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  created_at: string;
+  change?: AssistantChange;
+}
+
+/** GET /api/cvs/{cv_id}/assistant (never calls the model). */
+export interface AssistantConversation {
+  messages: AssistantMessage[];
+  /** The last change made by the assistant can be undone. */
+  can_undo: boolean;
+}
+
+/** POST …/assistant/messages and …/assistant/undo: `saved` is the PUT result when the CV was saved. */
+export interface AssistantResult extends AssistantConversation {
+  saved: CvUpdateResult | null;
+}
+
+/** Sent with a message or an undo: the assistant may change the CV only without unsaved manual edits. */
+export interface AssistantGuard {
+  allow_changes: boolean;
+  /** updated_at of the CV shown in the editor: a CV changed elsewhere is not overwritten. */
+  base_updated_at: number;
+}
+
 // ---------- layout.json (cv/layout.py) ----------
 
 export interface LayoutRegion {
@@ -350,6 +387,12 @@ export interface CvApi {
   /** Starts the deep preparation (once: 409 if it exists, is running, or lacks a completed analysis). */
   startPreparation(id: string): Promise<{ task_id: string }>;
   getTask(taskId: string): Promise<CvTask>;
+  /** The conversation of the CV assistant (empty at first). Never calls Claude. */
+  getAssistant(id: string): Promise<AssistantConversation>;
+  /** One message: one Claude call; the CV is saved only for an explicit, valid, unblocked change. */
+  sendAssistantMessage(id: string, text: string, guard: AssistantGuard): Promise<AssistantResult>;
+  /** Back to the CV before the assistant's last change (409 if the CV changed since). */
+  undoAssistant(id: string, guard: AssistantGuard): Promise<AssistantResult>;
 }
 
 export type { Language };
