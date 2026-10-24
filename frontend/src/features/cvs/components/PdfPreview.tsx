@@ -7,7 +7,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
@@ -34,6 +34,10 @@ function zoneLabel(zone: LayoutZone): string {
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 2;
 const SCALE_STEP = 0.15;
+/** Largest zoom chosen automatically when the page is fitted to the width of the preview. */
+const MAX_FIT_SCALE = 1.5;
+/** Horizontal padding of the scroll area (p-4 on both sides). */
+const PREVIEW_PADDING = 32;
 
 function PdfPageView({
   doc,
@@ -102,10 +106,11 @@ function PdfPageView({
               aria-label={zoneLabel(zone)}
               data-zone={zone.id}
               onClick={() => onSelectZone(zone)}
-              className={`absolute rounded-sm transition-colors ${
+              // Light marks: an outline and a faint tint, so the text underneath stays readable
+              className={`absolute rounded-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
                 selected
-                  ? "bg-primary/15 ring-2 ring-primary"
-                  : "hover:bg-primary/10 hover:ring-1 hover:ring-primary/40"
+                  ? "bg-primary/5 ring-2 ring-primary/60"
+                  : "hover:bg-primary/5 hover:ring-1 hover:ring-primary/30"
               }`}
               style={{
                 left: `${zone.x * 100}%`,
@@ -148,6 +153,34 @@ export function PdfPreview({
   const [currentPage, setCurrentPage] = useState(1);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The page is fitted to the width of the preview (on load, and when the preview is resized) until
+  // the user zooms: from then on the scale is the user's and is kept, also for a new version.
+  const userZoomed = useRef(false);
+  const pageWidth = useRef(0);
+
+  const fitToWidth = useCallback(() => {
+    const available = (scrollRef.current?.clientWidth ?? 0) - PREVIEW_PADDING;
+    if (userZoomed.current || !pageWidth.current || available <= 0) return;
+    setScale(
+      Math.min(MAX_FIT_SCALE, Math.max(MIN_SCALE, +(available / pageWidth.current).toFixed(2))),
+    );
+  }, []);
+
+  // Resizing the preview (split handle, window) refits the page, once the size has settled.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(fitToWidth, 120);
+    });
+    observer.observe(el);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [fitToWidth]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,7 +204,14 @@ export function PdfPreview({
       const task = pdfjs.getDocument({ url: pdfUrl });
       loadingTask = task;
       const loaded = await task.promise;
-      if (!cancelled) setDoc(loaded);
+      if (cancelled) return;
+      if (!pageWidth.current) {
+        const page = await loaded.getPage(1);
+        if (cancelled) return;
+        pageWidth.current = page.getViewport({ scale: 1 }).width;
+      }
+      fitToWidth();
+      setDoc(loaded);
     })().catch((error: unknown) => {
       if (cancelled) return;
       const status = (error as { status?: number } | null)?.status;
@@ -185,7 +225,7 @@ export function PdfPreview({
       cancelled = true;
       void loadingTask?.destroy(); // frees the worker document of this version
     };
-  }, [pdfUrl]);
+  }, [pdfUrl, fitToWidth]);
 
   const pageCount = doc?.numPages ?? 0;
 
@@ -216,7 +256,10 @@ export function PdfPreview({
             className="size-7"
             aria-label="Zoom arrière"
             disabled={scale <= MIN_SCALE}
-            onClick={() => setScale((s) => Math.max(MIN_SCALE, +(s - SCALE_STEP).toFixed(2)))}
+            onClick={() => {
+              userZoomed.current = true;
+              setScale((s) => Math.max(MIN_SCALE, +(s - SCALE_STEP).toFixed(2)));
+            }}
           >
             <ZoomOut className="size-3.5" />
           </Button>
@@ -229,7 +272,10 @@ export function PdfPreview({
             className="size-7"
             aria-label="Zoom avant"
             disabled={scale >= MAX_SCALE}
-            onClick={() => setScale((s) => Math.min(MAX_SCALE, +(s + SCALE_STEP).toFixed(2)))}
+            onClick={() => {
+              userZoomed.current = true;
+              setScale((s) => Math.min(MAX_SCALE, +(s + SCALE_STEP).toFixed(2)));
+            }}
           >
             <ZoomIn className="size-3.5" />
           </Button>

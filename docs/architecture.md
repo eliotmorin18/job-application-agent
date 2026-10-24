@@ -78,6 +78,19 @@ compilation fails or the PDF has more than one page, the previous cv.json, secti
 layout are restored (422). On success
 `metadata.json.updated_at` changes; the frontend reloads the PDF and the zones for that version.
 
+**CV tab (frontend).** Left panel / PDF preview split that the user drags (`react-resizable-panels`,
+40 / 60 by default, editor 30–65 % and at least 360 px). The left panel shows either the editor
+(« Modifier »: save bar on top, section tabs that wrap with the panel width, skills reordered by
+drag and drop or keyboard in `SortableTagInput`, no new dependency) or the check (« Vérifier »,
+`CvCheckPanel`). The check is local and deterministic (`adapters.cvChecks`): up to six requirements
+the profile documents (met or partial), essential ones first, without conditions or spoken languages;
+the offer's terms are searched word for word in the draft cv.json (alternatives only when the offer
+writes « ou »/« or »/« / »), and the evidence entries of the analysis are matched with the CV by
+`source_id`. States: « Présent », « À vérifier », « Non mentionné » (never « missing from the
+profile »). A point highlights its section or entry zone of `layout.json` when it exists (never a
+word), otherwise « Emplacement non identifié »; « Modifier cette section » switches to the editor.
+No Claude call, no score, nothing written.
+
 **Fit analysis.** `cv/analysis.py`, one Claude call: Python fixes the list of requirements from
 `offer.json`; Claude rates each one (`met`, `partial`, `not_documented`, `missing`), writes the
 overview and the strengths (no interview content: `recommendations` is kept empty, and the

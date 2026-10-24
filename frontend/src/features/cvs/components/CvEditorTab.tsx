@@ -1,28 +1,45 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
-import { FileX2, Loader2, Lock, RefreshCw, Save } from "lucide-react";
+import { Check, FileX2, ListChecks, Loader2, Lock, Pencil, RefreshCw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ConfirmDialog, EmptyState } from "@/features/candidate/components/common";
 import { profileQuery } from "@/features/candidate/hooks";
 import { ApiError, cvApi } from "@/services/api/cvApi";
 import type { CvDocument, CvSummary } from "@/services/api/cvTypes";
 import {
+  EDITOR_MAX_PERCENT,
   cleanDocument,
+  editorMinPercent,
   layoutZones,
   zoneIdFor,
+  type CvLocation,
   type CvSelection,
   type ItemSection,
   type LayoutZone,
 } from "../adapters";
 import { cvDetailQuery, cvLayoutQuery, cvListQuery, errorMessage } from "../hooks";
+import { CvCheckPanel, type CheckFocus } from "./CvCheckPanel";
 import { CvEditorPanel } from "./CvEditorPanel";
 import { PdfPreview } from "./PdfPreview";
+
+/** Minimum size of the editor panel (percent of the split) for the measured width of the split. */
+function useEditorMinSize(group: HTMLDivElement | null): number {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!group || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setWidth(group.offsetWidth));
+    observer.observe(group);
+    return () => observer.disconnect();
+  }, [group]);
+  return editorMinPercent(width);
+}
 
 const isItemSection = (section: string): section is ItemSection =>
   section === "experiences" || section === "education" || section === "projects";
@@ -78,6 +95,12 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
   const [draft, setDraft] = useState<CvDocument | null>(null);
   const [selection, setSelection] = useState<CvSelection>({ section: "profile" });
   const [saving, setSaving] = useState(false);
+  // Left panel: the editor (« Modifier », default) or the check of the offer's points (« Vérifier »).
+  // The draft lives here: switching never loses unsaved changes.
+  const [mode, setMode] = useState<"edit" | "check">("edit");
+  const [checkFocus, setCheckFocus] = useState<CheckFocus | null>(null);
+  const [splitGroup, setSplitGroup] = useState<HTMLDivElement | null>(null);
+  const editorMinSize = useEditorMinSize(splitGroup);
 
   // (Re)initialize the local draft when the CV is loaded or another CV is opened.
   useEffect(() => {
@@ -123,7 +146,7 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
 
   if (!saved || !draft)
     return (
-      <div className="grid gap-6 lg:grid-cols-[2fr_3fr]">
+      <div className="grid gap-5 lg:grid-cols-2">
         <Skeleton className="h-[32rem] w-full rounded-xl" />
         <Skeleton className="hidden h-[32rem] w-full rounded-xl lg:block" />
       </div>
@@ -155,9 +178,73 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
   };
 
   // The PDF shows the saved version: translate selections between saved and draft entries.
-  const selectedZoneId = zoneIdFor(translate(selection, draft, saved));
-  const onSelectZone = (zone: LayoutZone) =>
+  const zoneOf = (s: CvSelection) => zoneIdFor(translate(s, draft, saved));
+  const editorZoneId = zoneOf(selection);
+  // A location of the check is highlighted only when its zone exists in layout.json (else nothing).
+  const hasZone = (location: CvLocation) =>
+    zones.some((zone) => zone.id === zoneOf(location.selection));
+  const checkZoneId =
+    checkFocus?.location && hasZone(checkFocus.location)
+      ? zoneOf(checkFocus.location.selection)
+      : null;
+  const selectedZoneId = mode === "check" ? checkZoneId : editorZoneId;
+  // PDF → editor in both modes: a click on a zone opens that part in the editor.
+  const onSelectZone = (zone: LayoutZone) => {
+    setMode("edit");
     setSelection(translate({ section: zone.section, index: zone.index }, saved, draft));
+  };
+  // « Modifier cette section »: back to the editor on that part (nothing is changed in the CV).
+  const editLocation = (location: CvLocation) => {
+    setSelection(location.selection);
+    setMode("edit");
+  };
+
+  // Save controls at the top of the editor (they stay visible while the fields scroll): the state,
+  // discreet, next to the button.
+  const saveBar = (
+    <div className="flex items-center justify-end gap-2 border-b px-3 py-2">
+      <span
+        role="status"
+        className="mr-auto flex min-w-0 items-center gap-1.5 truncate text-xs text-muted-foreground"
+      >
+        {saving ? (
+          <>
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            Enregistrement et recompilation…
+          </>
+        ) : dirty ? (
+          <>
+            <span className="size-2 shrink-0 rounded-full bg-priority-medium-foreground" />
+            Modifications non enregistrées
+          </>
+        ) : (
+          <>
+            <Check className="size-3.5 shrink-0" />
+            Enregistré
+          </>
+        )}
+      </span>
+      {dirty && !saving && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 shrink-0"
+          onClick={() => setDraft(structuredClone(saved))}
+        >
+          Annuler
+        </Button>
+      )}
+      <Button
+        size="sm"
+        className="h-8 shrink-0"
+        disabled={!dirty || saving}
+        onClick={() => void save()}
+      >
+        {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+        Enregistrer
+      </Button>
+    </div>
+  );
 
   const panel = (
     <CvEditorPanel
@@ -167,6 +254,7 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
       onSelect={setSelection}
       profile={profile.data}
       profileError={profile.error ? errorMessage(profile.error) : null}
+      toolbar={saveBar}
     />
   );
   const preview = cv.has_pdf ? (
@@ -192,43 +280,74 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
     />
   );
 
-  const saveBar = (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-card px-4 py-2.5 shadow-soft">
-      {saving ? (
-        <span className="text-xs text-muted-foreground">
-          Enregistrement et recompilation en cours…
-        </span>
-      ) : dirty ? (
-        <Badge className="bg-priority-medium font-normal text-priority-medium-foreground">
-          Modifications non enregistrées
-        </Badge>
-      ) : (
-        <span className="text-xs text-muted-foreground">
-          Toutes les modifications sont enregistrées.
-        </span>
-      )}
-      <div className="flex gap-2">
-        {dirty && !saving && (
-          <Button size="sm" variant="ghost" onClick={() => setDraft(structuredClone(saved))}>
-            Annuler les modifications
-          </Button>
+  const modeSwitch = (
+    <ToggleGroup
+      type="single"
+      size="sm"
+      variant="outline"
+      value={mode}
+      onValueChange={(value) => value && setMode(value as "edit" | "check")}
+      aria-label="Contenu du panneau gauche"
+      className="justify-start"
+    >
+      <ToggleGroupItem value="edit" className="h-7 gap-1.5 px-2.5 text-xs">
+        <Pencil className="size-3.5" />
+        Modifier
+      </ToggleGroupItem>
+      <ToggleGroupItem value="check" className="h-7 gap-1.5 px-2.5 text-xs">
+        <ListChecks className="size-3.5" />
+        Vérifier
+      </ToggleGroupItem>
+    </ToggleGroup>
+  );
+
+  // The editor stays mounted (hidden) in « Vérifier »: its scroll and local state are kept too.
+  const left = (
+    <div className="flex h-full flex-col gap-2">
+      {modeSwitch}
+      <div className="min-h-0 flex-1">
+        <div hidden={mode !== "edit"} className="h-full">
+          {panel}
+        </div>
+        {mode === "check" && (
+          <CvCheckPanel
+            cv={cv}
+            draft={draft}
+            dirty={dirty}
+            focus={checkFocus}
+            hasZone={hasZone}
+            onFocus={setCheckFocus}
+            onEdit={editLocation}
+          />
         )}
-        <Button size="sm" disabled={!dirty || saving} onClick={() => void save()}>
-          {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-          Enregistrer les modifications
-        </Button>
       </div>
     </div>
   );
 
   return (
-    <div className="space-y-4">
-      {saveBar}
-
-      {/* Desktop: 40 / 60 split */}
-      <div className="hidden gap-6 lg:grid lg:grid-cols-[2fr_3fr]">
-        <div className="h-[calc(100vh-17rem)] min-h-[28rem]">{panel}</div>
-        <div className="h-[calc(100vh-17rem)] min-h-[28rem]">{preview}</div>
+    <div>
+      {/* Desktop: editor / PDF split that the user can drag (mouse, touch, or the keyboard on the
+          handle; a double-click resets it to 40 / 60) */}
+      <div className="hidden h-[calc(100vh-14rem)] min-h-[28rem] lg:block">
+        <ResizablePanelGroup orientation="horizontal" elementRef={setSplitGroup}>
+          <ResizablePanel
+            id="cv-editor"
+            defaultSize="40"
+            minSize={String(editorMinSize)}
+            maxSize={String(EDITOR_MAX_PERCENT)}
+          >
+            {left}
+          </ResizablePanel>
+          <ResizableHandle
+            withHandle
+            aria-label="Redimensionner l'éditeur et l'aperçu"
+            title="Glisser pour redimensionner · double-clic pour revenir à 40 / 60"
+            className="mx-2 bg-transparent transition-colors hover:bg-border data-[separator=hover]:bg-border data-[separator=active]:bg-primary/40 [&>div]:opacity-60 [&>div]:transition-opacity hover:[&>div]:opacity-100"
+          />
+          <ResizablePanel id="cv-preview" defaultSize="60" minSize="35">
+            {preview}
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
 
       {/* Mobile / tablet: stacked with tabs */}
@@ -238,10 +357,10 @@ export function CvEditorTab({ cv }: { cv: CvSummary }) {
           <TabsTrigger value="apercu">Aperçu</TabsTrigger>
         </TabsList>
         <TabsContent value="edition" className="mt-4">
-          <div className="h-[32rem]">{panel}</div>
+          <div className="h-[36rem]">{left}</div>
         </TabsContent>
         <TabsContent value="apercu" className="mt-4">
-          <div className="h-[32rem]">{preview}</div>
+          <div className="h-[36rem]">{preview}</div>
         </TabsContent>
       </Tabs>
 

@@ -71,6 +71,32 @@ export function layoutZones(layout: CvLayout | null | undefined): LayoutZone[] {
   });
 }
 
+/** `items` with the element at `from` moved to `to` (reordering skills in the editor). */
+export function moveItem<T>(items: T[], from: number, to: number): T[] {
+  const next = [...items];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved as T);
+  return next;
+}
+
+// ---------- Editor / PDF split ----------
+
+/** The editor takes 30 to 65 % of the split, and never less than EDITOR_MIN_PX. */
+export const EDITOR_MIN_PERCENT = 30;
+export const EDITOR_MAX_PERCENT = 65;
+/** Seven section tabs on two lines at most, usable fields: measured in Chromium (tabs ≈ 581 px). */
+export const EDITOR_MIN_PX = 360;
+
+/**
+ * Minimum size of the editor panel, in percent of the split of `width` pixels: 30 %, raised to keep
+ * EDITOR_MIN_PX on small screens (sidebar open), never above the maximum. Unknown width: 30 %.
+ */
+export function editorMinPercent(width: number): number {
+  if (!(width > 0)) return EDITOR_MIN_PERCENT;
+  const floor = Math.ceil((EDITOR_MIN_PX / width) * 100);
+  return Math.min(EDITOR_MAX_PERCENT, Math.max(EDITOR_MIN_PERCENT, floor));
+}
+
 /** Zone highlighted for the current selection (the languages share the skills zone). */
 export function zoneIdFor(selection: CvSelection): string {
   const section = selection.section === "languages" ? "skills" : selection.section;
@@ -621,4 +647,316 @@ export function attentionPoints(analysis: CompletedAnalysis, max = 2): Attention
     status: c.status as AttentionPoint["status"],
     explanation: firstSentence(explanation(c.parts, c.status)),
   }));
+}
+
+// ---------- « Vérifier » (onglet CV) ----------
+// Is what the offer looks for visible in the CV? Local and deterministic: the terms of the offer are
+// searched word for word in cv.json, and the profile elements the analysis cites as evidence are
+// matched with the CV entries by their source_id. Nothing is re-assessed, nothing is written.
+
+/** « Présent »: a precise term is in the CV; « À vérifier »: only an evidence entry is; else « Non mentionné ». */
+export type CvCheckState = "present" | "uncertain" | "absent";
+
+export interface CvLocation {
+  selection: CvSelection;
+  /** "Expérience · Stagiaire data", "Compétences · Langages"… */
+  label: string;
+}
+
+export interface CvCheck {
+  id: string;
+  /** The requirement as the offer writes it. */
+  text: string;
+  state: CvCheckState;
+  /** Terms of the offer (or cited profile elements) found in the CV, word for word. */
+  terms: string[];
+  /** Terms of the offer that were looked for and not found (criteria that are all needed). */
+  missing: string[];
+  /** Where in the CV: the entries holding the terms, or the evidence entries (state "uncertain"). */
+  locations: CvLocation[];
+}
+
+// Conditions that a CV does not argue (status, diploma, duration, eligibility) and spoken languages
+// (always listed in the CV): left out of the check, they stay in « Exigences détaillées ». Whole words
+// only (« Large Language Models » is not a spoken language).
+const NOT_ARGUED = [
+  "convention",
+  "etudiant",
+  "etudiante",
+  "derniere annee",
+  "diplome",
+  "diplomee",
+  "bac+3",
+  "bac+4",
+  "bac+5",
+  "permis",
+  "nationalite",
+  "titre de sejour",
+  "visa",
+  "autorisation de travail",
+  "work permit",
+  "eligible",
+  "eligibilite",
+  "eligibility",
+  "disponible",
+  "disponibilite",
+  "duree",
+  "mois",
+  "months",
+  "ans d'experience",
+  "annees d'experience",
+  "years of experience",
+  "anglais",
+  "anglophone",
+  "francais",
+  "francophone",
+  "english",
+  "french",
+  "langue",
+  "langues",
+];
+
+/** One searchable part of the CV, with where it is. */
+interface CvPassage {
+  location: CvLocation;
+  text: string;
+}
+
+function cvPassages(doc: CvDocument): CvPassage[] {
+  const join = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" \n ");
+  return [
+    {
+      location: { selection: { section: "profile" }, label: "Profil · résumé" },
+      text: doc.header.summary,
+    },
+    ...doc.experiences.map((e, index) => ({
+      location: {
+        selection: { section: "experiences" as const, index },
+        label: `Expérience · ${[e.title, e.organization].filter(Boolean).join(" — ")}`,
+      },
+      text: join(e.title, e.organization, e.context, ...e.bullets),
+    })),
+    ...doc.projects.map((p, index) => ({
+      location: { selection: { section: "projects" as const, index }, label: `Projet · ${p.name}` },
+      text: join(p.name, ...p.bullets),
+    })),
+    ...doc.education.map((e, index) => ({
+      location: {
+        selection: { section: "education" as const, index },
+        label: `Formation · ${e.institution}`,
+      },
+      text: join(e.institution, ...e.bullets),
+    })),
+    ...doc.skills.map((g) => ({
+      location: { selection: { section: "skills" as const }, label: `Compétences · ${g.label}` },
+      text: join(g.label, ...g.items),
+    })),
+    {
+      location: { selection: { section: "languages" }, label: "Langues" },
+      text: join(...doc.languages.map((l) => l.name)),
+    },
+    {
+      location: { selection: { section: "interests" }, label: "Centres d'intérêt" },
+      text: join(...doc.interests),
+    },
+  ];
+}
+
+/** Whole-word (or whole-phrase) presence of `term` in `text`, case and accents ignored. */
+function mentions(text: string, term: string): boolean {
+  const t = normalize(term);
+  if (t.length < 2) return false;
+  const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\p{L}\\p{N}+#])${escaped}($|[^\\p{L}\\p{N}+#])`, "u").test(
+    normalize(text),
+  );
+}
+
+function uniqueTerms(terms: string[]): string[] {
+  const seen = new Set<string>();
+  return terms.filter((t) => {
+    const key = normalize(t);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Terms to look for in the CV for one requirement: `named`, the technologies and skills of the offer
+ * that the requirement names; `cited`, the skills / interests / languages of the profile that the
+ * analysis cites as its evidence (« Intérêt pour le sport » → « Football »).
+ */
+function searchTerms(
+  analysis: CompletedAnalysis,
+  line: RequirementLine,
+): { named: string[]; cited: string[] } {
+  const vocabulary = [...analysis.overview.technologies, ...analysis.overview.skills_sought]
+    .flatMap((s) => s.split(/\s+\/\s+/))
+    .map((s) => s.trim())
+    .filter((s) => s && isKeyword(s));
+  const named = uniqueTerms(vocabulary.filter((term) => mentions(line.text, term)));
+  const cited = uniqueTerms(
+    line.parts
+      .flatMap((p) => p.evidence)
+      .filter((e) => e.type === "skill" || e.type === "interest" || e.type === "language")
+      .map((e) => e.label),
+  ).filter((t) => !named.some((n) => normalize(n) === normalize(t)));
+  return { named, cited };
+}
+
+/** CV entries (by source_id) that the analysis cites as evidence for the requirement. */
+function evidenceLocations(
+  line: RequirementLine,
+  doc: CvDocument,
+  passages: CvPassage[],
+): CvLocation[] {
+  const sections = {
+    experience: "experiences",
+    project: "projects",
+    education: "education",
+  } as const;
+  return line.parts
+    .flatMap((p) => p.evidence)
+    .flatMap((e) => {
+      const section = sections[e.type as keyof typeof sections];
+      if (!section) return [];
+      const index = doc[section].findIndex((entry) => entry.source_id === e.id);
+      if (index < 0) return [];
+      const passage = passages.find(
+        (p) => p.location.selection.section === section && p.location.selection.index === index,
+      );
+      return passage ? [passage.location] : [];
+    });
+}
+
+const SECTION_RANK: CvSectionKey[] = [
+  "experiences",
+  "projects",
+  "profile",
+  "education",
+  "skills",
+  "languages",
+  "interests",
+];
+
+function uniqueLocations(locations: CvLocation[]): CvLocation[] {
+  const seen = new Set<string>();
+  return locations
+    .filter((l) => {
+      const key = `${l.selection.section}/${l.selection.index ?? ""}/${l.label}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        SECTION_RANK.indexOf(a.selection.section) - SECTION_RANK.indexOf(b.selection.section),
+    );
+}
+
+const CHECK_ORDER: RequirementGroup[] = ["essential", "required", "preferred"];
+
+/**
+ * The named terms of a requirement, grouped as the offer writes them: terms enumerated one after the
+ * other (« a, b ou c », « a / b ») are alternatives when the last link is « ou », « or » or « / »;
+ * any other term stands alone (all needed). Only explicit links are read: nothing is guessed.
+ */
+function termGroups(text: string, named: string[]): string[][] {
+  const t = normalize(text);
+  const placed = named
+    .map((term) => ({ term, at: t.indexOf(normalize(term)), length: normalize(term).length }))
+    .filter((p) => p.at >= 0)
+    .sort((a, b) => a.at - b.at);
+  const groups: string[][] = [];
+  let chain: typeof placed = [];
+  let alternative = false;
+  const close = () => {
+    if (alternative) groups.push(chain.map((p) => p.term));
+    else groups.push(...chain.map((p) => [p.term]));
+    chain = [];
+    alternative = false;
+  };
+  for (const p of placed) {
+    const last = chain[chain.length - 1];
+    const link = last ? t.slice(last.at + last.length, p.at) : null;
+    if (last && link !== null && /^(\s*,\s*|\s+(ou|or)\s+|\s*\/\s*)$/.test(link)) {
+      alternative = /^\s+(ou|or)\s+$|^\s*\/\s*$/.test(link);
+      chain.push(p);
+    } else {
+      if (chain.length) close();
+      chain = [p];
+    }
+  }
+  if (chain.length) close();
+  return groups;
+}
+
+/**
+ * Up to `max` requirements of the offer worth arguing in the CV, essential ones first: only those the
+ * profile documents (met or partially met), so that « Non mentionné » always means « your profile
+ * shows it, your CV does not », never « you lack it ». Conditions and spoken languages are left out.
+ *
+ * « Présent »: the terms of the offer are in the CV (one is enough for alternatives written with
+ * « ou »), or — when the offer names no precise term — a profile element cited as evidence is.
+ * « À vérifier »: only some of the terms, only a cited element in other words, or only an entry the
+ * analysis cites. « Non mentionné »: none of these.
+ */
+export function cvChecks(analysis: CompletedAnalysis, doc: CvDocument, max = 6): CvCheck[] {
+  const passages = cvPassages(doc);
+  const where = (terms: string[]) =>
+    uniqueLocations(
+      passages.filter((p) => terms.some((t) => mentions(p.text, t))).map((p) => p.location),
+    );
+  return requirementLines(analysis)
+    .filter((line) => line.parts.some((p) => p.status === "met" || p.status === "partial"))
+    .filter((line) => {
+      const sources = new Set(line.parts.map((p) => p.source));
+      return (
+        !NOT_ARGUED.some((w) => mentions(line.text, w)) &&
+        !["education", "experience", "languages"].some((s) => sources.has(s))
+      );
+    })
+    .map((line, i) => ({ line, i }))
+    .sort(
+      (a, b) => CHECK_ORDER.indexOf(a.line.group) - CHECK_ORDER.indexOf(b.line.group) || a.i - b.i,
+    )
+    .slice(0, max)
+    .map(({ line }): CvCheck => {
+      const { named, cited } = searchTerms(analysis, line);
+      const inCv = (t: string) => passages.some((p) => mentions(p.text, t));
+      const foundNamed = named.filter(inCv);
+      const foundCited = cited.filter(inCv);
+      const base = { id: line.id, text: line.text };
+      if (foundNamed.length > 0) {
+        // Split parts given as alternatives: one is enough; otherwise each group of terms needs one
+        const unmet =
+          line.relation === "or"
+            ? []
+            : termGroups(line.text, named).filter((group) => !group.some(inCv));
+        return {
+          ...base,
+          state: unmet.length === 0 ? "present" : "uncertain",
+          terms: foundNamed,
+          missing: unmet.map((group) => group.join(" ou ")),
+          locations: where(foundNamed),
+        };
+      }
+      if (foundCited.length > 0)
+        return {
+          ...base,
+          state: named.length === 0 ? "present" : "uncertain",
+          terms: foundCited,
+          missing: named,
+          locations: where(foundCited),
+        };
+      const cv = uniqueLocations(evidenceLocations(line, doc, passages));
+      return {
+        ...base,
+        state: cv.length > 0 ? "uncertain" : "absent",
+        terms: [],
+        missing: named,
+        locations: cv,
+      };
+    });
 }

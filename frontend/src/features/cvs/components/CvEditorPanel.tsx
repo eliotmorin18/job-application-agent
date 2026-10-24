@@ -1,19 +1,5 @@
-import {
-  ArrowDown,
-  ArrowUp,
-  Briefcase,
-  FolderGit2,
-  GraduationCap,
-  Heart,
-  Languages,
-  Plus,
-  Sparkles,
-  Trash2,
-  UserRound,
-  X,
-  type LucideIcon,
-} from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Plus, Trash2, X } from "lucide-react";
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { ListEditor, TagInput } from "@/features/candidate/components/common";
+import { ListEditor } from "@/features/candidate/components/common";
 import type {
   ContactType,
   CvDocument,
@@ -42,15 +28,18 @@ import type {
 } from "@/services/api/cvTypes";
 import type { CandidateProfile } from "@/services/api/types";
 import { profileEntries, type CvSectionKey, type CvSelection, type ItemSection } from "../adapters";
+import { SortableTagInput } from "./SortableTagInput";
 
-const SECTIONS: { key: CvSectionKey; label: string; icon: LucideIcon }[] = [
-  { key: "profile", label: "Profil", icon: UserRound },
-  { key: "experiences", label: "Expériences", icon: Briefcase },
-  { key: "education", label: "Formation", icon: GraduationCap },
-  { key: "projects", label: "Projets", icon: FolderGit2 },
-  { key: "skills", label: "Compétences", icon: Sparkles },
-  { key: "languages", label: "Langues", icon: Languages },
-  { key: "interests", label: "Intérêts", icon: Heart },
+// Text only (no icons): the seven sections fit on one line in a wide editor and wrap onto a second
+// one (or a third at the narrowest width) when the editor panel is narrowed. Never cut, never scrolled.
+const SECTIONS: { key: CvSectionKey; label: string }[] = [
+  { key: "profile", label: "Profil" },
+  { key: "experiences", label: "Expériences" },
+  { key: "education", label: "Formation" },
+  { key: "projects", label: "Projets" },
+  { key: "skills", label: "Compétences" },
+  { key: "languages", label: "Langues" },
+  { key: "interests", label: "Intérêts" },
 ];
 
 const CONTACT_LABELS: Record<ContactType, string> = {
@@ -166,6 +155,86 @@ function AddFromProfileDialog({
   );
 }
 
+/**
+ * Section navigation: tabs that wrap with the width of the editor panel itself. Keyboard: Tab
+ * reaches the selected section, arrows / Home / End move between sections (WAI-ARIA tabs pattern).
+ */
+function SectionTabs({
+  draft,
+  section,
+  onSelect,
+  panelId,
+}: {
+  draft: CvDocument;
+  section: CvSectionKey;
+  onSelect: (s: CvSelection) => void;
+  panelId: string;
+}) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKeyDown = (event: KeyboardEvent, index: number) => {
+    const last = SECTIONS.length - 1;
+    const target =
+      event.key === "ArrowRight"
+        ? index === last
+          ? 0
+          : index + 1
+        : event.key === "ArrowLeft"
+          ? index === 0
+            ? last
+            : index - 1
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? last
+              : null;
+    if (target === null) return;
+    event.preventDefault();
+    onSelect({ section: SECTIONS[target]!.key });
+    refs.current[target]?.focus();
+  };
+
+  return (
+    <div
+      role="tablist"
+      aria-label="Sections du CV"
+      className="flex flex-wrap gap-1 border-b px-2 py-1.5"
+    >
+      {SECTIONS.map((s, index) => {
+        const active = s.key === section;
+        const count = s.key === "profile" ? undefined : draft[s.key].length;
+        return (
+          <button
+            key={s.key}
+            ref={(el) => {
+              refs.current[index] = el;
+            }}
+            type="button"
+            role="tab"
+            id={`${panelId}-${s.key}`}
+            aria-selected={active}
+            aria-controls={panelId}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onSelect({ section: s.key })}
+            onKeyDown={(e) => onKeyDown(e, index)}
+            className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${
+              active
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            {s.label}
+            {count !== undefined && (
+              <span className={`tabular-nums ${active ? "opacity-80" : "opacity-60"}`}>
+                {count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function CvEditorPanel({
   draft,
   onChange,
@@ -173,6 +242,7 @@ export function CvEditorPanel({
   onSelect,
   profile,
   profileError,
+  toolbar,
 }: {
   draft: CvDocument;
   onChange: (next: CvDocument) => void;
@@ -180,8 +250,11 @@ export function CvEditorPanel({
   onSelect: (s: CvSelection) => void;
   profile: CandidateProfile | undefined;
   profileError: string | null;
+  /** Save controls, at the top of the panel: they stay visible while the fields scroll. */
+  toolbar?: ReactNode;
 }) {
   const [addOpen, setAddOpen] = useState(false);
+  const panelId = useId();
   const section = selection.section;
   const isItemSection =
     section === "experiences" || section === "education" || section === "projects";
@@ -227,33 +300,14 @@ export function CvEditorPanel({
 
   return (
     <div className="flex h-full flex-col rounded-xl border bg-card shadow-soft">
-      {/* Section nav */}
-      <div className="flex flex-wrap gap-1 border-b p-2">
-        {SECTIONS.map((s) => {
-          const active = s.key === section;
-          const count = s.key === "profile" ? undefined : draft[s.key].length;
-          return (
-            <button
-              key={s.key}
-              type="button"
-              onClick={() => onSelect({ section: s.key })}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                active
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
-            >
-              <s.icon className="size-3.5" />
-              {s.label}
-              {count !== undefined && (
-                <span className={active ? "opacity-80" : "opacity-60"}>({count})</span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+      {toolbar}
+      <SectionTabs draft={draft} section={section} onSelect={onSelect} panelId={panelId} />
+      <div
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={`${panelId}-${section}`}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
+      >
         {section === "profile" && (
           <>
             <Field label="Nom">
@@ -581,8 +635,9 @@ export function CvEditorPanel({
                     <Trash2 className="size-3.5" />
                   </Button>
                 </div>
-                <TagInput
+                <SortableTagInput
                   value={group.items}
+                  label={group.label || `Groupe ${i + 1}`}
                   onChange={(items) =>
                     patch({ skills: draft.skills.map((g, j) => (j === i ? { ...g, items } : g)) })
                   }
@@ -655,10 +710,13 @@ export function CvEditorPanel({
 
         {section === "interests" && (
           <Field label="Centres d'intérêt">
-            <TagInput
+            <SortableTagInput
               value={draft.interests}
               onChange={(interests) => patch({ interests })}
               placeholder="Ajouter un centre d'intérêt…"
+              label="Centres d'intérêt"
+              itemName="centre d'intérêt"
+              addLabel="Ajouter un centre d'intérêt"
             />
           </Field>
         )}

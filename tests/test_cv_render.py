@@ -130,6 +130,21 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(sections["interests"].endswith(
             "\\section*{\\cvanchor{interests}Centres d'intérêt}\n\nTennis \\textbullet\\ Échecs\n"))
 
+    def test_skills_keep_the_order_chosen_in_the_editor(self):
+        doc = small_doc()
+        doc["skills"] = [{"label": "Programmation", "items": ["C++", "Rust", "Python"]},
+                         {"label": "Outils", "items": ["Git", "Docker"]}]
+        skills = render_sections(doc)["technical-skills"]
+        self.assertIn("    \\textbf{Programmation :} & C++, Rust, Python \\\\\n", skills)
+        self.assertIn("    \\textbf{Outils :} & Git, Docker \\\\\n", skills)
+        self.assertLess(skills.index("Programmation"), skills.index("Outils"))
+
+    def test_interests_keep_the_order_chosen_in_the_editor(self):
+        doc = small_doc()
+        doc["interests"] = ["Échecs", "Tennis", "Escalade"]
+        self.assertTrue(render_sections(doc)["interests"].endswith(
+            "Échecs \\textbullet\\ Tennis \\textbullet\\ Escalade\n"))
+
     def test_english_labels(self):
         sections = render_sections(small_doc("en"))
         self.assertIn("\\textbf{Profile:}", sections["heading"])

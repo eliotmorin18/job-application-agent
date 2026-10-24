@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   attentionPoints,
   cleanDocument,
+  cvChecks,
+  editorMinPercent,
   exampleTasks,
   jobBrief,
   educationKeys,
@@ -25,7 +27,7 @@ import {
   profileFixture,
   task,
 } from "./fixtures/cvFixtures";
-import type { Requirement } from "@/services/api/cvTypes";
+import type { Evidence, Requirement } from "@/services/api/cvTypes";
 
 describe("layout.json -> clickable zones", () => {
   it("converts normalized regions to zones and ignores unknown keys", () => {
@@ -632,5 +634,152 @@ describe("attentionPoints", () => {
       duplicate_of: "c",
     });
     expect(attentionPoints(analysis)).toEqual([]);
+  });
+});
+
+describe("editorMinPercent", () => {
+  it("keeps 30 % on wide screens and at least 360 px for the editor on small ones", () => {
+    expect(editorMinPercent(1400)).toBe(30); // 30 % = 420 px
+    expect(editorMinPercent(1200)).toBe(30); // 360 px exactly
+    expect(editorMinPercent(940)).toBe(39); // small laptop, sidebar open
+    expect(editorMinPercent(688)).toBe(53); // 1 024 px screen
+    expect(editorMinPercent(400)).toBe(65); // never above the maximum
+    expect(editorMinPercent(0)).toBe(30); // hidden (mobile) or not measured yet
+  });
+});
+
+describe("cvChecks", () => {
+  type Spec = Partial<Requirement> & Pick<Requirement, "id" | "text">;
+  const setup = (specs: Spec[], vocabulary: string[] = []) => {
+    const analysis = analysisFixture();
+    const base: Requirement = {
+      ...analysis.requirements[0]!,
+      category: "required",
+      source: "must_have",
+      importance: "high",
+      status: "met",
+      evidence: [],
+    };
+    analysis.requirements = specs.map((spec) => ({ ...base, ...spec }));
+    analysis.overview.technologies = vocabulary;
+    analysis.overview.skills_sought = [];
+    return analysis;
+  };
+  const ev = (type: Evidence["type"], id: string, label = id): Evidence => ({
+    type,
+    id,
+    label,
+    justification: "",
+  });
+  const doc = documentFixture(); // exp-a « Stagiaire data » (Spark), exp-b « Assistant », skills Python, SQL
+  const summary = (analysis: ReturnType<typeof setup>) =>
+    cvChecks(analysis, doc).map((c) => [
+      c.id,
+      c.state,
+      c.terms,
+      c.missing,
+      c.locations.map((l) => l.label),
+    ]);
+
+  it("finds the terms of the offer in the CV, with where they are", () => {
+    expect(
+      summary(setup([{ id: "r1", text: "Maîtrise de Spark et de Python" }], ["Spark", "Python"])),
+    ).toEqual([
+      [
+        "r1",
+        "present",
+        ["Spark", "Python"],
+        [],
+        ["Expérience · Stagiaire data — Société A", "Compétences · Langages"],
+      ],
+    ]);
+  });
+
+  it("is satisfied by one alternative, needs every criterion joined by « et », reads no comma", () => {
+    const vocabulary = ["Spark", "Flink", "Python", "Rust", "Go"];
+    expect(
+      summary(
+        setup(
+          [
+            { id: "or", text: "Spark ou Flink" },
+            { id: "and", text: "Python et Rust" },
+            { id: "comma", text: "Langages : Python, Go" },
+          ],
+          vocabulary,
+        ),
+      ).map(([id, state, , missing]) => [id, state, missing]),
+    ).toEqual([
+      ["or", "present", []],
+      ["and", "uncertain", ["Rust"]],
+      ["comma", "uncertain", ["Go"]],
+    ]);
+  });
+
+  it("uses the profile elements cited as evidence, and the cited CV entries", () => {
+    const analysis = setup([
+      { id: "sport", text: "Intérêt pour le sport", evidence: [ev("interest", "Escalade")] },
+      {
+        id: "dash",
+        text: "Tableaux de bord pour les équipes",
+        evidence: [ev("experience", "exp-b")],
+      },
+      { id: "web", text: "Développement web", evidence: [ev("project", "proj-z")] },
+    ]);
+    expect(summary(analysis)).toEqual([
+      ["sport", "present", ["Escalade"], [], ["Centres d'intérêt"]],
+      ["dash", "uncertain", [], [], ["Expérience · Assistant — Société B"]],
+      ["web", "absent", [], [], []],
+    ]);
+    // A cited element in other words than the offer's own term stays uncertain
+    const worded = setup(
+      [{ id: "r", text: "Maîtrise de PySpark", evidence: [ev("skill", "Python")] }],
+      ["PySpark"],
+    );
+    expect(summary(worded)).toEqual([
+      ["r", "uncertain", ["Python"], ["PySpark"], ["Compétences · Langages"]],
+    ]);
+  });
+
+  it("keeps only what the profile documents, without conditions or spoken languages", () => {
+    const analysis = setup(
+      [
+        { id: "undocumented", text: "Kafka", status: "not_documented" },
+        { id: "missing", text: "Spark avancé", status: "missing" },
+        { id: "student", text: "Étudiant(e) en dernière année de master" },
+        { id: "internship", text: "Convention de stage obligatoire" },
+        { id: "school", text: "Bac+5 en informatique", source: "education" },
+        { id: "english", text: "Anglais courant" },
+        { id: "llm", text: "Large Language Models" },
+      ],
+      ["Large Language Models"],
+    );
+    expect(cvChecks(analysis, doc).map((c) => [c.id, c.state])).toEqual([["llm", "absent"]]);
+  });
+
+  it("lists essential points first, six at most, and reads older analyses", () => {
+    const specs: Spec[] = [
+      { id: "preferred", text: "Python", category: "preferred", source: "nice_to_have" },
+      { id: "normal", text: "SQL", importance: "normal" },
+      ...["alpha", "beta", "gamma", "delta", "epsilon", "zeta"].map((id) => ({
+        id: `high-${id}`,
+        text: `Spark ${id}`,
+      })),
+    ];
+    const ids = cvChecks(setup(specs, ["Spark", "Python", "SQL"]), doc).map((c) => c.id);
+    expect(ids).toEqual([
+      "high-alpha",
+      "high-beta",
+      "high-gamma",
+      "high-delta",
+      "high-epsilon",
+      "high-zeta",
+    ]);
+    // Older analysis: no split parts, evidence of the former types only, no vocabulary
+    const old = setup([
+      { id: "r", text: "Pipelines de données", evidence: [ev("experience", "exp-a")] },
+    ]);
+    expect(summary(old)).toEqual([
+      ["r", "uncertain", [], [], ["Expérience · Stagiaire data — Société A"]],
+    ]);
   });
 });
